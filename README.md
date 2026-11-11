@@ -2,7 +2,9 @@
 
 An original three-box 3D scene for testing capture on the MacBook Air M2. No game assets or model dependencies.
 
-Run with the Godot 4.7.2 binary in `tools/`:
+Research: [findings](docs/RESEARCH.md), [architecture](docs/ARCHITECTURE.md), and [implementation plan](docs/IMPLEMENTATION_PLAN.md).
+
+Download the [official Godot 4.7.2 macOS editor](https://github.com/godotengine/godot-builds/releases/tag/4.7.2-stable), unpack `Godot.app` into `tools/`, then run:
 
 ```sh
 tools/Godot.app/Contents/MacOS/Godot --path . -- --capture
