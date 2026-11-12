@@ -1,5 +1,7 @@
 # Implementation-oriented research plan
 
+Historical AO-centered plan (2026-11-11). See [MODEL_DESIGN.md](MODEL_DESIGN.md), [TRAINING_METHODOLOGY.md](TRAINING_METHODOLOGY.md), and [EXPERIMENT_LOG.md](EXPERIMENT_LOG.md) for the current ML-first direction.
+
 Research snapshot: 2026-11-11. No implementation or training is authorized in this phase.
 
 ## Decision

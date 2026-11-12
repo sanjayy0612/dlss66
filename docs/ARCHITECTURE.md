@@ -1,5 +1,7 @@
 # Proposed architecture
 
+Historical AO-centered proposal (2026-11-11). The current ML-first direction and implemented RGB baseline are in [MODEL_DESIGN.md](MODEL_DESIGN.md). AO remains an optional classical ML baseline.
+
 Research snapshot: 2026-11-11. This is a proposed implementation, not a measured system.
 
 ## One recommended path

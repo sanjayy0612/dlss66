@@ -1,5 +1,7 @@
 # Lightweight 3D-guided neural rendering: research
 
+Historical research snapshot. Godot and MPS tests described as pending below were subsequently executed; see [TEST_RESULTS.md](../TEST_RESULTS.md) and [EXPERIMENT_LOG.md](EXPERIMENT_LOG.md). The current architecture focus is [MODEL_DESIGN.md](MODEL_DESIGN.md).
+
 Research snapshot: 2026-11-11. Status: source and documentation review; no local renderer build, capture, or benchmark has been run. Scores below are engineering judgments, not measured compatibility. The [architecture](ARCHITECTURE.md) and [plan](IMPLEMENTATION_PLAN.md) turn these findings into testable steps.
 
 ## What DLSS 5 publicly establishes
