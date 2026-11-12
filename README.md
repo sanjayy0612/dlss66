@@ -7,9 +7,9 @@ Research: [findings](docs/RESEARCH.md), [architecture](docs/ARCHITECTURE.md), an
 Download the [official Godot 4.7.2 macOS editor](https://github.com/godotengine/godot-builds/releases/tag/4.7.2-stable), unpack `Godot.app` into `tools/`, then run:
 
 ```sh
-tools/Godot.app/Contents/MacOS/Godot --path . -- --capture
+sh capture.sh
 ```
 
-Expected output: `captures/scene.png` and a `BUFFER_PROBE` line reporting color, depth, normal, and velocity texture availability. This tests a real Forward+ scene and its render-thread buffer handles. It does not yet export G-buffer pixels or train a model. See [TEST_RESULTS.md](TEST_RESULTS.md) for measured observations and the readback constraint.
+Expected output: `captures/scene.png`, `depth.png`, `normal.png`, and numerical `.npy` arrays. The command imports the compute shader, exports the renderer buffers, then checks their contents. See [TEST_RESULTS.md](TEST_RESULTS.md) for results and limits.
 
 The official Godot binary is kept in `tools/` and ignored by Git. The test scene uses procedural boxes and no copyrighted game assets.
