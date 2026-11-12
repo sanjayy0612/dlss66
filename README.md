@@ -27,3 +27,13 @@ sh capture.sh
 Expected output: `captures/scene.png`, `depth.png`, `normal.png`, and numerical `.npy` arrays. The command imports the compute shader, exports the renderer buffers, then checks their contents. See [TEST_RESULTS.md](TEST_RESULTS.md) for results and limits.
 
 The official Godot binary is kept in `tools/` and ignored by Git. The test scene uses procedural boxes and no copyrighted game assets.
+
+## Paired renderer data
+
+With the same pinned Godot app and Python packages NumPy and Pillow, run:
+
+```sh
+sh collect_dataset.sh
+```
+
+This generates 96 local pairs at 256×144 in ignored `dataset/raw/`, plus `manifest.jsonl` and `summary.json`. Each pair uses the same procedural scene and camera; the cheap pass has directional shadows off and the reference pass has them on. Scene IDs 0–5 are training, 6 is validation, and 7 is test. See [DATASET.md](docs/DATASET.md) for the exact task, validation results, and limitations. This is a small supervised shadow reconstruction dataset, not a DLSS 5 dataset.

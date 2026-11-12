@@ -14,9 +14,13 @@ The synthetic target is a fixed lighting/color transform on procedurally generat
 
 Earlier renderer capture experiments and their limits are in [TEST_RESULTS.md](../TEST_RESULTS.md).
 
+## Paired renderer capture, executed 2026-11-12
+
+`sh collect_dataset.sh` ran Godot 4.7.2 on the M2 Metal Forward+ renderer. It captured 96 pairs of 256×144 RGB PNGs from eight procedural scene layouts and 12 camera poses per layout. The two passes differed by directional shadows off versus on. `validate_dataset.py` checked matching seed, camera pose, dimensions, file presence, unique keys, and nonzero image differences. The scene split is 72 train, 12 validation, and 12 test pairs. Mean absolute cheap/reference difference was 10.199/255 per channel; the smallest pair was 2.041/255 and the largest 18.297/255. On average, 12.31% of pixels differed by more than five levels in at least one channel. A four-pair pilot produced identical SHA-256 PNG hashes on two runs. One sampled PNG pair and the manifest had matching hashes across two full runs. Full-corpus hash reproducibility and geometry-mask alignment were not independently measured. Details: [DATASET.md](DATASET.md).
+
 ## Planned, not executed
 
-- Capture paired cheap/reference Godot RGB from distinct scene layouts and camera trajectories; verify exact alignment and metadata.
+- Repeat full-corpus hashes and verify object-mask alignment if this dataset is used for a quantitative training claim.
 - Train Model A on those pairs with held-out scenes; compare against input and conventional appearance baselines at matched total cost.
 - Add a compact encoder-decoder if broader context improves held-out quality enough to justify extra memory/latency.
 - Build a conditional flow or consistency objective with noise/time input. Quantify teacher or trajectory cost before claiming one-step diffusion-family generation.

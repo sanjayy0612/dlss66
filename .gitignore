@@ -2,4 +2,6 @@
 captures/
 tools/
 artifacts/
+dataset/raw/*
+!dataset/raw/.gdignore
 __pycache__/

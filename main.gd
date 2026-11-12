@@ -4,6 +4,9 @@ const WIDTH := 256
 const HEIGHT := 144
 
 func _ready() -> void:
+	if OS.get_cmdline_user_args().has("--dataset"):
+		get_tree().change_scene_to_file.call_deferred("res://dataset.tscn")
+		return
 	get_window().size = Vector2i(WIDTH, HEIGHT)
 	make_box(Vector3(0, -0.3, 0), Vector3(12, 0.4, 12), Color(0.45, 0.53, 0.62))
 	make_box(Vector3(-1.2, 0.7, 0), Vector3(1.2, 1.6, 1.2), Color(0.84, 0.35, 0.2))
