@@ -13,6 +13,29 @@ from models.one_step import ConditionalNet, cosine_alphas, ddim_sample
 
 
 class PairedTests(unittest.TestCase):
+    def test_geometry_channels_and_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            rgb = np.full((8, 12, 3), 64, dtype=np.uint8)
+            Image.fromarray(rgb).save(root / "cheap.png")
+            Image.fromarray(rgb).save(root / "reference.png")
+            geometry = np.zeros((8, 12, 4), dtype="<f4")
+            geometry[2:6, 3:9, 0] = 0.1
+            geometry[2:6, 3:9, 2] = 1.0
+            geometry.tofile(root / "geometry.rgba32f")
+            row = {"split": "test", "cheap": "cheap.png", "reference": "reference.png",
+                   "geometry": "geometry.rgba32f", "camera_near": 0.05, "camera_far": 100.0,
+                   "light_direction_view": [0, -1, 0]}
+            (root / "manifest.jsonl").write_text(json.dumps(row) + "\n")
+            x, y = ShadowPairs(root, "test", include_geometry=True)[0]
+            self.assertEqual(tuple(x.shape), (11, 8, 12))
+            self.assertEqual(tuple(y.shape), (3, 8, 12))
+            self.assertEqual(float(x[7, 3, 4]), 1.0)  # Valid mask.
+            self.assertEqual(float(x[7, 0, 0]), 0.0)
+            self.assertAlmostEqual(float(x[5, 3, 4]), 1.0)  # View normal Y.
+            model = MultiScaleRenderer(condition_channels=11)
+            self.assertTrue(torch.equal(model(x.unsqueeze(0)), x[:3].unsqueeze(0)))
+
     def test_diffusion_teacher_and_student_shapes(self):
         device = torch.device("cpu")
         teacher = ConditionalNet(with_time=True)

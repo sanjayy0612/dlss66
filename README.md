@@ -36,7 +36,7 @@ With the same pinned Godot app and Python packages NumPy and Pillow, run:
 sh collect_dataset.sh
 ```
 
-This generates 96 local pairs at 256×144 in ignored `dataset/raw/`, plus `manifest.jsonl` and `summary.json`. Each pair uses the same procedural scene and camera; the cheap pass has directional shadows off and the reference pass has them on. Scene IDs 0–5 are training, 6 is validation, and 7 is test. See [DATASET.md](docs/DATASET.md) for the exact task, validation results, and limitations. This is a small supervised shadow reconstruction dataset, not a DLSS 5 dataset.
+This generates 192 local RGB pairs at 256×144 in ignored `dataset/raw/`, plus depth/normal geometry for each cheap frame, `manifest.jsonl`, and `summary.json`. Each pair uses the same procedural scene and camera; the cheap pass has directional shadows off and the reference pass has them on. Scene IDs 0–11 are training, 12–13 validation, and 14–15 test. See [DATASET.md](docs/DATASET.md) for the exact format, validation results, and limitations. This is a small supervised shadow reconstruction dataset, not a DLSS 5 dataset.
 
 ## Shadow-model experiments
 
@@ -49,4 +49,14 @@ python3 -m training.train_one_step --teacher-steps 200 --student-steps 100 --dev
 python3 -m evaluation.compare_shadow --device auto
 ```
 
-The third command trains a conditional diffusion noise predictor, samples it with eight deterministic DDIM steps, then distills those outputs into a one-call student. This is a small **diffusion-distillation experiment**, not NVIDIA's disclosed implementation. Current M2 results show that none of the three trained models beats the cheap input on held-out image MAE; see [EXPERIMENT_LOG.md](docs/EXPERIMENT_LOG.md). Checkpoints and comparison images are local in ignored `artifacts/`.
+The third command trains a conditional diffusion noise predictor, samples it with eight deterministic DDIM steps, then distills those outputs into a one-call student. This is a small **diffusion-distillation experiment**, not NVIDIA's disclosed implementation. The original 96-pair results, where none beat the cheap input, are in [EXPERIMENT_LOG.md](docs/EXPERIMENT_LOG.md) and can be reproduced from commit `778cc70`. These commands use the expanded dataset when run on current `main`. Checkpoints and comparison images are local in ignored `artifacts/`.
+
+The newer geometry-conditioned comparison uses the expanded dataset:
+
+```sh
+python3 -m training.train_pairs --kind multiscale --epochs 20 --device auto --output artifacts/shadow_rgb_16.pt
+python3 -m training.train_pairs --kind geometry --epochs 20 --device auto --output artifacts/shadow_geometry_16.pt
+python3 -m evaluation.compare_geometry --device auto
+```
+
+The geometry model takes RGB, depth, view normals, a valid-depth mask, and view-space light direction. It improved aggregate held-out image error, but did not improve every scene. Its checkpoint and comparison image remain local in `artifacts/`.

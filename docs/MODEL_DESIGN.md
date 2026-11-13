@@ -1,6 +1,6 @@
 # Model design and tensor operations
 
-Decision: compare a deterministic RGB residual CNN, a small multiscale encoder-decoder, and a conditional diffusion teacher distilled to one call on the same held-out Godot scene. All three are now implemented as small experiments. None currently beats the cheap input on test MAE; see [EXPERIMENT_LOG.md](EXPERIMENT_LOG.md).
+Decision: compare a deterministic RGB residual CNN, a small multiscale encoder-decoder, and a conditional diffusion teacher distilled to one call. On the original 96-pair RGB dataset, none beat the cheap input on test MAE. The later 192-pair dataset adds geometry and light direction; a matched geometry-conditioned multiscale model improved aggregate test metrics but not every scene. See [EXPERIMENT_LOG.md](EXPERIMENT_LOG.md).
 
 ## Model A: implemented residual CNN
 
@@ -29,6 +29,8 @@ RGB residual is the best first representation because existing Godot RGB capture
 ## Model B: implemented multiscale encoder-decoder
 
 The implemented [MultiScaleRenderer](../models/multiscale.py) accepts `B×3×144×256` RGB. Its encoder produces 12 channels at 144×256, 16 at 72×128, 24 at 36×64, and 32 at 18×32. Bilinear upsampling and skip concatenation restore full resolution. A 3-channel head predicts a bounded RGB residual. It has 79,179 parameters. It was trained with the same loss and split as Model A. It stayed close to identity on the held-out scene, so larger receptive field alone did not solve shadow placement.
+
+The same backbone can now accept `B×11×144×256` conditioning: 3 RGB channels, 1 depth channel (linear meters divided by 10 and clipped), 3 decoded view-normal channels, 1 valid-depth mask, and 3 spatially constant view-space light-direction channels. The first three channels are also the skip-connected RGB output base. This variant has 80,043 parameters. It used the same 20 epochs, weighted L1 loss, validation selection, and 16-layout split as the matched RGB-only backbone. Its changed-pixel test error fell from 0.3075 for the cheap input to 0.1239, but its unchanged-pixel error rose to 0.0261. This is a useful but imperfect shadow predictor; it worsened one of the two held-out scene layouts.
 
 ## Model C: implemented diffusion-distillation experiment
 

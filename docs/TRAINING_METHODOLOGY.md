@@ -3,7 +3,7 @@
 ## Data ladder
 
 1. **Executed smoke task:** seeded synthetic colored rectangles with a deterministic spatial illumination transform. It verifies tensors, optimization, checkpointing, and MPS operation. It says nothing about realistic neural rendering or scene generalization.
-2. **Executed paired task:** 96 Godot shadow-off/shadow-on pairs at identical resolution and camera pose. The split uses six training layouts, one validation layout, and one test layout. See [DATASET.md](DATASET.md). Depth and normals are not aligned to these pairs.
+2. **Executed paired task:** the original 96 Godot RGB pairs were expanded to 192 pairs across 16 layouts, with aligned cheap-pass depth and view normals. The current split uses 12 training layouts, two validation layouts, and two test layouts. See [DATASET.md](DATASET.md). The current geometry model also receives the light direction in view coordinates. Depth/normals come from the cheap frame; the reference pass is the same seeded scene and camera with shadows enabled.
 3. **Later:** add moving objects, motion vectors, temporal state, and controlled disocclusion/camera-cut sequences. Reference output is a chosen renderer configuration, not necessarily physical ground truth.
 
 For paired deterministic training, the initial objective is `L_rec = mean |y_hat-y|`. Optional edge fidelity is `L_edge = mean |∇y_hat-∇y|`; optional perceptual fidelity is `L_perc = ||φ(y_hat)-φ(y)||`, with a fixed feature extractor. These are **our proposed losses**, not NVIDIA's undisclosed DLSS 5 losses. A bounded residual and input-consistency masks can protect structures, but must be checked on object boundaries. [Deep Shading](https://arxiv.org/abs/1603.06078) establishes geometry-conditioned learned shading as related prior work.

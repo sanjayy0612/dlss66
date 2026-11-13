@@ -16,12 +16,12 @@ Earlier renderer capture experiments and their limits are in [TEST_RESULTS.md](.
 
 ## Paired renderer capture, executed 2026-11-12
 
-`sh collect_dataset.sh` ran Godot 4.7.2 on the M2 Metal Forward+ renderer. It captured 96 pairs of 256×144 RGB PNGs from eight procedural scene layouts and 12 camera poses per layout. The two passes differed by directional shadows off versus on. `validate_dataset.py` checked matching seed, camera pose, dimensions, file presence, unique keys, and nonzero image differences. The scene split is 72 train, 12 validation, and 12 test pairs. Mean absolute cheap/reference difference was 10.199/255 per channel; the smallest pair was 2.041/255 and the largest 18.297/255. On average, 12.31% of pixels differed by more than five levels in at least one channel. A four-pair pilot produced identical SHA-256 PNG hashes on two runs. One sampled PNG pair and the manifest had matching hashes across two full runs. Full-corpus hash reproducibility and geometry-mask alignment were not independently measured. Details: [DATASET.md](DATASET.md).
+`sh collect_dataset.sh` ran Godot 4.7.2 on the M2 Metal Forward+ renderer. It captured 96 pairs of 256×144 RGB PNGs from eight procedural scene layouts and 12 camera poses per layout. The two passes differed by directional shadows off versus on. `validate_dataset.py` checked matching seed, camera pose, dimensions, file presence, unique keys, and nonzero image differences. The scene split is 72 train, 12 validation, and 12 test pairs. Mean absolute cheap/reference difference was 10.199/255 per channel; the smallest pair was 2.041/255 and the largest 18.297/255. On average, 12.31% of pixels differed by more than five levels in at least one channel. A four-pair pilot produced identical SHA-256 PNG hashes on two runs. One sampled PNG pair and the manifest had matching hashes across two full runs. Full-corpus hash reproducibility and geometry-mask alignment were not independently measured. This original data generator is preserved in commit `387b4fc`; the current [dataset](DATASET.md) is the expanded version.
 
 ## Planned, not executed
 
 - Repeat full-corpus hashes and verify object-mask alignment if this dataset is used for a quantitative training claim.
-- Add aligned depth, normals, and a light-direction input; increase layout diversity before interpreting failed RGB-only shadow prediction as a general limit of neural rendering.
+- Expand scene and lighting diversity beyond the current 16 procedural layouts before interpreting shadow results as a general limit of neural rendering.
 - Compare a useful model against a conventional shadow baseline at matched end-to-end cost.
 - Evaluate temporal stability with moving objects and motion vectors. Fixed still-image seeds alone do not prevent video flicker.
 
@@ -50,3 +50,31 @@ python3 -m evaluation.compare_shadow --device mps
 ```
 
 The timing uses 10 warmups and 30 synchronized MPS samples per model at 256×144. CNN p95 was 1.87 ms, multiscale 2.49 ms, teacher 14.48 ms, and student 2.42 ms. It excludes Godot rendering, readback, tensor creation, and presentation. Peak memory, SSIM, LPIPS, model-frame temporal consistency, and matched conventional shadow-rendering cost remain unmeasured. Checkpoints and full result JSON files are in ignored `artifacts/` and can be regenerated with the commands above. The one-step result establishes the code path and cost difference, **not** DLSS 5 quality or real-time integration.
+
+## Geometry-guided capture and matched model comparison, executed 2026-11-13
+
+`sh collect_dataset.sh` regenerated the dataset with 16 layouts × 12 camera poses using Godot 4.7.2, Metal Forward+ on the M2. The cheap pass exported 192 aligned RGBA32F depth/normal frames through `dataset_probe.gd`; the reference pass saved shadowed RGB from the same seeded geometry and camera. The split is 144 train, 24 validation, and 24 test pairs by scene. The validator found all 192 geometry files at exactly 589,824 bytes, finite reverse-Z depth, foreground unit normals (maximum length error 1.2×10⁻⁷), and zero mismatch between cheap/reference sky masks. View depth ranged 0.800–9.332 m. All geometry hashes were distinct. The local dataset is about 112 MiB and is not committed.
+
+One early full capture stalled while waiting for `frame_post_draw`; removing that wait and forcing draws resolved the four-pair pilot. A later run timed out when the compositor was not being redrawn; requesting draws during the asynchronous readback wait allowed the full 192-pair run to complete. The timeout run emitted RID leak warnings on abrupt quit; the error path now calls compositor cleanup. The final capture completed without reported Godot errors. These are execution-path observations, not a measured GPU readback latency for the new dataset.
+
+Two models used the same multiscale backbone, 20 epochs, weighted L1 loss, seed 7, and scene split. The RGB-only model had 79,179 parameters; the geometry-conditioned model had 80,043 and consumed 11 channels (RGB, metric depth, view normals, valid mask, view-space light direction). Checkpoints were selected by validation whole-image MAE before evaluating test scenes 14 and 15.
+
+| 16-layout test set | MAE ↓ | PSNR dB ↑ | Changed-pixel MAE ↓ | Unchanged-pixel MAE ↓ |
+|---|---:|---:|---:|---:|
+| Cheap input | 0.03978 | 18.67 | 0.30747 | 0.00002 |
+| RGB-only multiscale, best epoch 1 | 0.04247 | 18.77 | 0.30307 | 0.00375 |
+| Geometry-conditioned, best epoch 18 | **0.03878** | **20.76** | **0.12387** | 0.02614 |
+
+The aggregate gain hides uneven scene transfer. The geometry model improved 10 of 24 test frames. Scene 14 mean MAE worsened from 0.01026 (input) to 0.03401; scene 15 improved from 0.06930 to 0.04354. The saved comparison at `artifacts/geometry_comparison/test_scene_14_frame_0.png` shows dark halos around some objects. The model appears to learn some shadow placement but also changes unshadowed regions; it is not a robust renderer yet.
+
+Commands executed:
+
+```sh
+sh collect_dataset.sh
+python3 -m unittest discover -s tests -q
+python3 -m training.train_pairs --kind multiscale --epochs 20 --device mps --output artifacts/shadow_rgb_16.pt
+python3 -m training.train_pairs --kind geometry --epochs 20 --device mps --output artifacts/shadow_geometry_16.pt
+python3 -m evaluation.compare_geometry --device mps
+```
+
+The first synchronized 30-sample model-only timing run at 256×144 measured mean 2.44 ms for RGB-only and 2.22 ms for geometry. A repeat measured means 3.12 and 2.91 ms, with p95 6.49 and 5.48 ms; the variation makes a speed ranking unjustified. These timings exclude Godot rendering, readback, tensor construction, and display. End-to-end FPS, peak memory, temporal stability, and a matched conventional shadow baseline remain unmeasured. The practical next experiment is to improve cross-scene coverage and penalize false shadow changes before returning to the one-step generator.

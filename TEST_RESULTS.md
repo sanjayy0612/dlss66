@@ -28,4 +28,4 @@ Godot 4.7.2 did not create the normal/roughness texture from `needs_normal_rough
 
 ## Next step
 
-Measure the GPU compute pass and readback transfer separately with a Metal trace, then capture deterministic moving camera paths with per-frame RGB/geometry pairing. No AO, model training, or Core ML integration has started.
+The [paired dataset](docs/DATASET.md) now captures RGB and cheap-pass depth/normals for deterministic camera poses across 16 procedural layouts. This does not measure GPU export and transfer separately; a Metal trace remains needed. Camera poses are static during each capture, and no moving-object temporal pipeline or Core ML integration has been added. Model experiments are recorded in [EXPERIMENT_LOG.md](docs/EXPERIMENT_LOG.md).

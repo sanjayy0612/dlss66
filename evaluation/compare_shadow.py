@@ -64,7 +64,8 @@ def run(device_name: str, output: Path) -> dict:
     montage = Image.new("RGB", (frames[0].width * len(frames), frames[0].height))
     for index, frame in enumerate(frames):
         montage.paste(frame, (index * frame.width, 0))
-    montage.save(output / "test_scene_7_frame_0.png")
+    scene_id = data.rows[0]["scene_id"]
+    montage.save(output / f"test_scene_{scene_id}_frame_0.png")
     result = {"device": str(device), "resolution": [x.shape[-1], x.shape[-2]],
               "montage_order": ["cheap", "reference", *calls], "model_only": timings}
     (output / "benchmark.json").write_text(json.dumps(result, indent=2) + "\n")

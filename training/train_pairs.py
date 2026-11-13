@@ -20,6 +20,9 @@ def build_model(kind: str):
     if kind == "multiscale":
         from models.multiscale import MultiScaleRenderer
         return MultiScaleRenderer(max_delta=0.6)
+    if kind == "geometry":
+        from models.multiscale import MultiScaleRenderer
+        return MultiScaleRenderer(max_delta=0.6, condition_channels=11)
     raise ValueError(kind)
 
 
@@ -28,9 +31,10 @@ def run(kind: str, epochs: int, device_name: str, root: Path, output: Path, seed
     np.random.seed(seed)
     torch.manual_seed(seed)
     device = select_device(device_name)
-    train = ShadowPairs(root, "train")
-    validation = ShadowPairs(root, "validation")
-    test = ShadowPairs(root, "test")
+    use_geometry = kind == "geometry"
+    train = ShadowPairs(root, "train", include_geometry=use_geometry)
+    validation = ShadowPairs(root, "validation", include_geometry=use_geometry)
+    test = ShadowPairs(root, "test", include_geometry=use_geometry)
     loader = DataLoader(train, batch_size=4, shuffle=True,
                         generator=torch.Generator().manual_seed(seed))
     model = build_model(kind).to(device)
@@ -46,7 +50,7 @@ def run(kind: str, epochs: int, device_name: str, root: Path, output: Path, seed
         for x, y in loader:
             x, y = x.to(device), y.to(device)
             prediction = model(x)
-            changed = ((x - y).abs().amax(dim=1, keepdim=True) > 5 / 255).float()
+            changed = ((x[:, :3] - y).abs().amax(dim=1, keepdim=True) > 5 / 255).float()
             weights = 1 + 4 * changed
             loss = (weights * (prediction - y).abs()).mean()
             optimizer.zero_grad(set_to_none=True)
@@ -75,7 +79,7 @@ def run(kind: str, epochs: int, device_name: str, root: Path, output: Path, seed
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--kind", choices=("cnn", "multiscale"), default="cnn")
+    parser.add_argument("--kind", choices=("cnn", "multiscale", "geometry"), default="cnn")
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--device", choices=("auto", "mps", "cuda", "cpu"), default="auto")
     parser.add_argument("--data", type=Path, default=Path("dataset/raw"))

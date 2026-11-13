@@ -11,12 +11,13 @@ def conv_pair(source: int, target: int) -> nn.Sequential:
 
 
 class MultiScaleRenderer(nn.Module):
-    def __init__(self, max_delta: float = 0.6):
+    def __init__(self, max_delta: float = 0.6, condition_channels: int = 3):
         super().__init__()
-        if not 0 < max_delta <= 1:
-            raise ValueError("invalid max_delta")
+        if not 0 < max_delta <= 1 or condition_channels < 3:
+            raise ValueError("invalid model configuration")
         self.max_delta = max_delta
-        self.enc0 = conv_pair(3, 12)
+        self.condition_channels = condition_channels
+        self.enc0 = conv_pair(condition_channels, 12)
         self.enc1 = conv_pair(12, 16)
         self.enc2 = conv_pair(16, 24)
         self.enc3 = conv_pair(24, 32)
@@ -28,10 +29,11 @@ class MultiScaleRenderer(nn.Module):
         nn.init.zeros_(self.tail.weight)
         nn.init.zeros_(self.tail.bias)
 
-    def forward(self, rgb: torch.Tensor) -> torch.Tensor:
-        if rgb.ndim != 4 or rgb.shape[1] != 3:
-            raise ValueError("expected B×3×H×W RGB")
-        a = self.enc0(rgb)
+    def forward(self, condition: torch.Tensor) -> torch.Tensor:
+        if condition.ndim != 4 or condition.shape[1] != self.condition_channels:
+            raise ValueError("unexpected conditioning tensor")
+        rgb = condition[:, :3]
+        a = self.enc0(condition)
         b = self.enc1(F.avg_pool2d(a, 2))
         c = self.enc2(F.avg_pool2d(b, 2))
         d = self.mid(self.enc3(F.avg_pool2d(c, 2)))
