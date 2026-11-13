@@ -1,6 +1,6 @@
 # dlss66 — lightweight neural rendering research
 
-Research and implementation of compact renderer-conditioned neural appearance models inspired by public DLSS 5 ideas. This project does not reproduce NVIDIA DLSS 5. The first implemented model is a **deterministic RGB residual CNN**, not diffusion. An original three-box Godot scene remains a rendering and capture testbed.
+Research and implementation of compact renderer-conditioned neural appearance models inspired by public DLSS 5 ideas. This project does not reproduce NVIDIA DLSS 5. It now compares a **deterministic RGB residual CNN**, a small multiscale model, and a one-call student distilled from a conditional diffusion teacher. An original three-box Godot scene remains a rendering and capture testbed.
 
 Current model docs: [published DLSS 5 architecture](docs/DLSS5_ARCHITECTURE.md), [our model design](docs/MODEL_DESIGN.md), [training method](docs/TRAINING_METHODOLOGY.md), and [executed experiments](docs/EXPERIMENT_LOG.md). Earlier [graphics research](docs/RESEARCH.md), [AO-centered architecture](docs/ARCHITECTURE.md), and [original plan](docs/IMPLEMENTATION_PLAN.md) remain for historical context; AO is an optional baseline.
 
@@ -37,3 +37,16 @@ sh collect_dataset.sh
 ```
 
 This generates 96 local pairs at 256×144 in ignored `dataset/raw/`, plus `manifest.jsonl` and `summary.json`. Each pair uses the same procedural scene and camera; the cheap pass has directional shadows off and the reference pass has them on. Scene IDs 0–5 are training, 6 is validation, and 7 is test. See [DATASET.md](docs/DATASET.md) for the exact task, validation results, and limitations. This is a small supervised shadow reconstruction dataset, not a DLSS 5 dataset.
+
+## Shadow-model experiments
+
+With the local paired data, run the three experiments in order:
+
+```sh
+python3 -m training.train_pairs --kind cnn --epochs 20 --device auto --output artifacts/shadow_cnn.pt
+python3 -m training.train_pairs --kind multiscale --epochs 20 --device auto --output artifacts/shadow_multiscale.pt
+python3 -m training.train_one_step --teacher-steps 200 --student-steps 100 --device auto
+python3 -m evaluation.compare_shadow --device auto
+```
+
+The third command trains a conditional diffusion noise predictor, samples it with eight deterministic DDIM steps, then distills those outputs into a one-call student. This is a small **diffusion-distillation experiment**, not NVIDIA's disclosed implementation. Current M2 results show that none of the three trained models beats the cheap input on held-out image MAE; see [EXPERIMENT_LOG.md](docs/EXPERIMENT_LOG.md). Checkpoints and comparison images are local in ignored `artifacts/`.

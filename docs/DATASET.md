@@ -39,4 +39,4 @@ The scenes contain boxes with simple materials, only eight layouts, and a single
 
 One complete rerun stalled during Godot rendering in the restricted command sandbox and produced incomplete manifests. The validator rejected those partial files. A subsequent run with normal GUI access completed in about 11 seconds. Capture timing therefore varies by execution environment; 11 seconds is not a rendering benchmark.
 
-The next experiment is to train the existing deterministic residual CNN on the 72 training pairs, select by the 12 validation pairs, and report input-versus-model quality on the untouched test layout. Keep the input image as a baseline; compare against a conventional shadow or screen-space baseline before making a performance claim.
+The first CNN, multiscale, and diffusion-distillation experiments on this split are recorded in [EXPERIMENT_LOG.md](EXPERIMENT_LOG.md). None improved whole-image test MAE over the cheap input. Add aligned geometry guidance and more varied scenes before making a broader model-quality claim; compare against a conventional shadow or screen-space baseline before making a performance claim.
