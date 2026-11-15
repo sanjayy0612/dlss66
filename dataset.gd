@@ -46,6 +46,14 @@ func _ready() -> void:
 	environment.ssao_enabled = true
 	environment.ssao_intensity = 0.0
 	camera.environment = environment
+	if OS.get_cmdline_user_args().has("--live"):
+		var live_ok := await run_live()
+		if not live_ok and probe != null:
+			camera.compositor = null
+			RenderingServer.call_on_render_thread(probe.cleanup)
+			await get_tree().process_frame
+		get_tree().quit(0 if live_ok else 1)
+		return
 	if OS.has_environment("DLSS66_BENCHMARK"):
 		await benchmark_shadow_atlas()
 		get_tree().quit(0)
@@ -127,25 +135,159 @@ func _ready() -> void:
 	print("DATASET_COMPLETE variant=", variant, " frames=", layouts * frames)
 	get_tree().quit(0)
 
+func run_live() -> bool:
+	# A local experimental bridge. The 3D viewport stays separate from the output overlay.
+	var source_viewport := SubViewport.new()
+	source_viewport.size = SIZE
+	source_viewport.own_world_3d = true
+	source_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	add_child(source_viewport)
+	remove_child(world_root)
+	source_viewport.add_child(world_root)
+	remove_child(camera)
+	source_viewport.add_child(camera)
+	make_layout(28)
+	var compositor := Compositor.new()
+	probe = preload("res://dataset_probe.gd").new()
+	compositor.compositor_effects = [probe]
+	camera.compositor = compositor
+	camera.current = true
+	var layer := CanvasLayer.new()
+	add_child(layer)
+	var output_sprite := Sprite2D.new()
+	output_sprite.centered = false
+	layer.add_child(output_sprite)
+	var output_texture: ImageTexture
+	var peer := StreamPeerTCP.new()
+	var port := int(OS.get_environment("DLSS66_LIVE_PORT")) if OS.has_environment("DLSS66_LIVE_PORT") else 8766
+	if peer.connect_to_host("127.0.0.1", port) != OK:
+		push_error("Cannot connect to inference server")
+		return false
+	for wait_index in range(120):
+		peer.poll()
+		if peer.get_status() == StreamPeerTCP.STATUS_CONNECTED:
+			break
+		await get_tree().process_frame
+	if peer.get_status() != StreamPeerTCP.STATUS_CONNECTED:
+		push_error("Inference connection timed out")
+		return false
+	peer.set_no_delay(true)
+	var frame_count := int(OS.get_environment("DLSS66_LIVE_FRAMES")) if OS.has_environment("DLSS66_LIVE_FRAMES") else 24
+	var measurements: Array[Dictionary] = []
+	for frame_id in range(frame_count):
+		var frame_start := Time.get_ticks_usec()
+		var angle := 0.2 + TAU * float(frame_id % FRAMES) / float(FRAMES)
+		camera.position = Vector3(cos(angle) * 3.1, 2.7, sin(angle) * 3.1)
+		camera.look_at(Vector3(0, 0.65, 0))
+		for _warmup in range(2):
+			RenderingServer.force_draw()
+			await get_tree().process_frame
+		RenderingServer.call_on_render_thread(probe.arm.bind(""))
+		var geometry_ready := false
+		for _wait in range(90):
+			RenderingServer.force_draw()
+			await get_tree().process_frame
+			if probe.saved:
+				geometry_ready = true
+				break
+		if not geometry_ready:
+			push_error("Live geometry readback timed out")
+			return false
+		var export_us := Time.get_ticks_usec()
+		RenderingServer.force_draw()
+		var rgb_image := source_viewport.get_texture().get_image()
+		rgb_image.convert(Image.FORMAT_RGB8)
+		var rgb_bytes := rgb_image.get_data()
+		if rgb_bytes.size() != SIZE.x * SIZE.y * 3 or probe.latest_bytes.size() != SIZE.x * SIZE.y * 16:
+			push_error("Live frame buffer has wrong size")
+			return false
+		var rgb_us := Time.get_ticks_usec()
+		var light_view := camera.global_transform.basis.inverse() * (-sun.global_transform.basis.z)
+		var light := PackedFloat32Array([light_view.x, light_view.y, light_view.z]).to_byte_array()
+		if peer.put_data(rgb_bytes) != OK or peer.put_data(probe.latest_bytes) != OK or peer.put_data(light) != OK:
+			push_error("Inference request failed")
+			return false
+		var response := PackedByteArray()
+		for _receive in range(120):
+			peer.poll()
+			var available := peer.get_available_bytes()
+			if available > 0:
+				var chunk := peer.get_data(mini(available, SIZE.x * SIZE.y * 3 - response.size()))
+				if chunk[0] != OK:
+					push_error("Inference response failed")
+					return false
+				response.append_array(chunk[1])
+			if response.size() == SIZE.x * SIZE.y * 3:
+				break
+			await get_tree().process_frame
+		if response.size() != SIZE.x * SIZE.y * 3:
+			push_error("Inference response timed out")
+			return false
+		var inference_us := Time.get_ticks_usec()
+		var output_image := Image.create_from_data(SIZE.x, SIZE.y, false, Image.FORMAT_RGB8, response)
+		if output_texture == null:
+			output_texture = ImageTexture.create_from_image(output_image)
+			output_sprite.texture = output_texture
+		else:
+			output_texture.update(output_image)
+		var upload_us := Time.get_ticks_usec()
+		RenderingServer.force_draw()
+		await get_tree().process_frame
+		var shown_us := Time.get_ticks_usec()
+		measurements.append({"id": frame_id,
+			"export_ms": float(export_us - frame_start) / 1000.0,
+			"rgb_ms": float(rgb_us - export_us) / 1000.0,
+			"ipc_infer_ms": float(inference_us - rgb_us) / 1000.0,
+			"upload_ms": float(upload_us - inference_us) / 1000.0,
+			"pipeline_ms": float(shown_us - frame_start) / 1000.0})
+		print("LIVE_FRAME id=", frame_id,
+			" export_ms=", float(export_us - frame_start) / 1000.0,
+			" rgb_ms=", float(rgb_us - export_us) / 1000.0,
+			" ipc_infer_ms=", float(inference_us - rgb_us) / 1000.0,
+			" upload_ms=", float(upload_us - inference_us) / 1000.0,
+			" pipeline_ms=", float(shown_us - frame_start) / 1000.0)
+	DirAccess.make_dir_recursive_absolute("res://artifacts")
+	var measurements_file := FileAccess.open("res://artifacts/live_godot.json", FileAccess.WRITE)
+	measurements_file.store_string(JSON.stringify(measurements, "  ") + "\n")
+	measurements_file.close()
+	var display_image := get_viewport().get_texture().get_image()
+	display_image.save_png("res://artifacts/live_display.png")
+	peer.disconnect_from_host()
+	camera.compositor = null
+	RenderingServer.call_on_render_thread(probe.cleanup)
+	await get_tree().process_frame
+	return true
+
 func benchmark_shadow_atlas() -> void:
 	# Reuse the dataset scene and viewport, without readback or PNG encoding.
 	make_layout(28)
+	var effect_mode := OS.get_environment("DLSS66_BENCHMARK_EFFECT")
+	var pcss_mode := effect_mode == "pcss"
+	var ssil_mode := effect_mode == "ssil"
+	if ssil_mode:
+		RenderingServer.environment_set_ssil_quality(RenderingServer.ENV_SSIL_QUALITY_ULTRA, false, 1.0, 2, 0.0, 50.0)
 	camera.position = Vector3(cos(0.2) * 3.1, 2.7, sin(0.2) * 3.1)
 	camera.look_at(Vector3(0, 0.65, 0))
 	var viewport_rid := get_viewport().get_viewport_rid()
 	RenderingServer.viewport_set_measure_render_time(viewport_rid, true)
-	for atlas_size in [512, 4096, 512, 4096]:
+	for phase in range(4):
+		var atlas_size := 512 if pcss_mode or ssil_mode or phase % 2 == 0 else 4096
+		var angular_distance := 0.5 if pcss_mode and phase % 2 == 1 else 0.0
 		RenderingServer.directional_shadow_atlas_set_size(atlas_size, true)
+		sun.light_angular_distance = angular_distance
+		environment.ssil_enabled = ssil_mode and phase % 2 == 1
 		for _warmup in range(40):
 			RenderingServer.force_draw()
 			await get_tree().process_frame
 		var gpu_times: Array[float] = []
 		var cpu_times: Array[float] = []
+		var phase_start := Time.get_unix_time_from_system()
 		for _sample in range(100):
 			RenderingServer.force_draw()
 			await get_tree().process_frame
 			gpu_times.append(RenderingServer.viewport_get_measured_render_time_gpu(viewport_rid))
 			cpu_times.append(RenderingServer.viewport_get_measured_render_time_cpu(viewport_rid))
+		var phase_end := Time.get_unix_time_from_system()
 		gpu_times.sort()
 		cpu_times.sort()
 		var gpu_sum := 0.0
@@ -155,6 +297,9 @@ func benchmark_shadow_atlas() -> void:
 		for value in cpu_times:
 			cpu_sum += value
 		print("ATLAS_BENCHMARK size=", atlas_size,
+			" pcss_angular_deg=", angular_distance,
+			" ssil_enabled=", int(environment.ssil_enabled),
+			" phase_start_unix_s=", phase_start, " phase_end_unix_s=", phase_end,
 			" gpu_mean_ms=", gpu_sum / gpu_times.size(),
 			" gpu_p50_ms=", gpu_times[50], " gpu_p95_ms=", gpu_times[95],
 			" cpu_mean_ms=", cpu_sum / cpu_times.size(),

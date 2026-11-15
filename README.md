@@ -52,7 +52,18 @@ python3 -m evaluation.benchmark_refinement --device auto
 python3 -m evaluation.visualize_refinement --data dataset/shadow_resolution_fresh --scenes 32 33 34 35 --mask-bias 1.5 --device auto
 ```
 
-On the M2, the 80,152-parameter model reduced uncalibrated test MAE from 0.01136 to 0.01029 but initially worsened one scene. Validation-only mask calibration selected bias 1.5; on **four newly captured scenes**, it reduced MAE from 0.01031 to 0.00736 and improved 47/48 frames. An offline reprojection check found worse temporal error than the cheap renderer; a simple history blend partly reduced that error at a cost to image MAE. The benchmark excludes Godot rendering and display, so no end-to-end speedup is established. See [EXPERIMENT_LOG.md](docs/EXPERIMENT_LOG.md).
+On the M2, the 80,152-parameter model reduced uncalibrated test MAE from 0.01136 to 0.01029 but initially worsened one scene. Validation-only mask calibration selected bias 1.5; on **four newly captured scenes**, it reduced MAE from 0.01031 to 0.00736 and improved 47/48 frames. On another four unseen scenes, it reduced MAE from 0.00987 to 0.00751. Reprojected history of the predicted correction lowered temporal error from 0.00752 to 0.00573, though the cheap renderer remained steadier at 0.00511. See [EXPERIMENT_LOG.md](docs/EXPERIMENT_LOG.md).
+
+## Live M2 feasibility check
+
+The small Godot/PyTorch bridge sends captured RGB, depth, normals, and light direction to a local MPS service and displays its returned RGB. Run these in separate terminals after training the checkpoint above:
+
+```sh
+python3 -m evaluation.serve_live --device mps --frames 24 --warmup 10
+DLSS66_VARIANT=cheap DLSS66_TASK=shadow_resolution DLSS66_LIVE_FRAMES=24 tools/Godot.app/Contents/MacOS/Godot --path . -- --live
+```
+
+On the tested scene, steady serial processing took **55.17 ms median / 69.69 ms p95** over 17 frames, including geometry export, RGB readback, inference round trip, and output upload. A Metal trace found that raising the atlas from 512 to 4096 cost only about 0.2 ms of GPU work on this tiny scene. The live prototype is therefore a useful correctness probe, **not a performance win or a 30/60 FPS solution**. Current image-quality and timing limits are recorded in [EXPERIMENT_LOG.md](docs/EXPERIMENT_LOG.md).
 
 ## Shadow-model experiments
 

@@ -4,7 +4,7 @@ const WIDTH := 256
 const HEIGHT := 144
 
 func _ready() -> void:
-	if OS.get_cmdline_user_args().has("--dataset"):
+	if OS.get_cmdline_user_args().has("--dataset") or OS.get_cmdline_user_args().has("--live"):
 		get_tree().change_scene_to_file.call_deferred("res://dataset.tscn")
 		return
 	get_window().size = Vector2i(WIDTH, HEIGHT)

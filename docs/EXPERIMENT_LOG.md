@@ -158,3 +158,62 @@ python3 -m evaluation.temporal --data dataset/shadow_resolution_fresh --device m
 python3 -m evaluation.temporal_blend --device mps --mask-bias 1.5
 python3 -m unittest discover -s tests -q  # 11 tests passed
 ```
+
+## Metal cost and live integration probe, executed 2026-11-15
+
+The Godot viewport GPU timer remained `0.0` on this M2, so we used Xcode 16 `Metal System Trace` on the pinned Godot 4.7.2 app. [`dataset.gd`](../dataset.gd) now logs Unix phase timestamps and alternates conditions on one static scene and camera (scene 28 at 256×144), with 40 warmup and 100 measured draws per phase. [`evaluation/analyze_metal_trace.py`](../evaluation/analyze_metal_trace.py) assigns Godot GPU frames to phases using their timestamp midpoint, merges overlapping GPU-channel intervals per frame, and reports busy-time distributions. These are **GPU-work estimates**, not presented-frame latency. Full `.trace` files remain local in `/tmp` and are not committed. The table gives repeated phase medians, so variation is visible.
+
+| GPU work per Godot frame | Cheap phase medians | Costly phase medians | Difference, approximate |
+|---|---:|---:|---:|
+| Shadow atlas 512 vs 4096 | 0.410, 0.451 ms | 0.655, 0.649 ms | 0.20–0.25 ms |
+| Hard shadows vs PCSS at 0.5°; atlas 512 | 0.414, 0.428 ms | 0.491, 0.498 ms | 0.07–0.08 ms |
+| SSIL off vs ultra on; atlas 512 | 0.438, 0.439 ms | 0.780, 0.789 ms | 0.34–0.35 ms |
+
+These are three **separate traces**, not additive effects. The scene is small and the figures should not be generalized to games or higher resolutions. The official [Godot 4.7 RenderingServer API](https://docs.godotengine.org/en/4.7/classes/class_renderingserver.html) supplies the atlas and SSIL settings; [Godot's Light3D documentation](https://docs.godotengine.org/en/4.7/classes/class_light3d.html) identifies nonzero directional angular distance as PCSS with a performance cost. On this scene, none of these conventional effects saves enough GPU work to pay for the current 80,152-parameter PyTorch MPS model, whose standalone synchronized model-call median was about 2.3 ms. This is a serial-cost inference; overlapping or native GPU/ANE integration was not measured.
+
+The Metal trace workflow was:
+
+```sh
+xcrun xctrace record --template 'Metal System Trace' --time-limit 25s --output /tmp/dlss66_metal_labeled.trace --target-stdout /tmp/dlss66_godot_bench.log --no-prompt --env DLSS66_VARIANT=cheap --env DLSS66_TASK=shadow_resolution --env DLSS66_BENCHMARK=1 --launch -- tools/Godot.app/Contents/MacOS/Godot --path . -- --dataset
+xcrun xctrace export --input /tmp/dlss66_metal_labeled.trace --toc --output /tmp/dlss66_labeled_toc.xml
+xcrun xctrace export --input /tmp/dlss66_metal_labeled.trace --xpath '/trace-toc/run[@number="1"]/data/table[@schema="metal-gpu-intervals"]' --output /tmp/dlss66_labeled_gpu_intervals.xml
+python3 -m evaluation.analyze_metal_trace --toc /tmp/dlss66_labeled_toc.xml --intervals /tmp/dlss66_labeled_gpu_intervals.xml --log /tmp/dlss66_godot_bench.log
+```
+
+For PCSS or SSIL, add `--env DLSS66_BENCHMARK_EFFECT=pcss` or `ssil` to the `record` command and use distinct output paths. No Godot API errors were observed in these recordings.
+
+We then ran a **24-frame external live bridge**: an isolated Godot `SubViewport` rendered scene 28 and exported RGB plus aligned depth/normals; Godot sent RGB8, RGBA32F geometry, and view-space light direction over local TCP; [`evaluation/serve_live.py`](../evaluation/serve_live.py) built the same 11 input channels as training, ran the calibrated model on MPS, and returned RGB8; Godot uploaded it as an `ImageTexture` and displayed it. The final displayed image was inspected at `artifacts/live_display.png`. The server compared each output with the matching scene-28 reference frame. Two orbits of the 12 camera poses gave mean cheap MAE **0.005956** and model MAE **0.005514**, with **18/24** displayed frames improved. These are repeated poses from one already inspected scene, so this is an integration and alignment check, not new generalization evidence.
+
+After the first seven startup/transient frames, the remaining **17 frames** measured in `artifacts/live_godot.json` had median/p95 serial pipeline **55.17/69.69 ms** (about 18 FPS at the median). Component median times were geometry export and wait **27.30 ms**, RGB readback **9.54 ms**, local IPC plus inference **11.80 ms**, and output upload **0.059 ms**. The pipeline figure also includes an extra process-frame draw before returning. Server-side `artifacts/live_server.json` recorded median model transfer plus synchronized inference **6.75 ms** while the Godot app was active. A standalone exact-server benchmark with no Godot active measured median **7.62 ms** for condition assembly, transfer, inference, and RGB output. Making the input tensor contiguous reduced the standalone total from an earlier **9.69 ms** median; reusing a device input buffer gave no reliable further gain, so that extra state was removed. These timings vary with startup and system state. The bridge is a deliberately serial prototype, and its frame time is above both 16.7 ms (60 FPS) and 33.3 ms (30 FPS). No zero-copy or native integration is claimed.
+
+Commands for the live check:
+
+```sh
+# Terminal 1, wait for LIVE_SERVER_READY:
+python3 -m evaluation.serve_live --device mps --frames 24 --warmup 10
+# Terminal 2:
+DLSS66_VARIANT=cheap DLSS66_TASK=shadow_resolution DLSS66_LIVE_FRAMES=24 tools/Godot.app/Contents/MacOS/Godot --path . -- --live
+python3 -m evaluation.benchmark_live_server --device mps --samples 100
+```
+
+This experiment answers the current cost question negatively for the **measured serial bridge**: the quality gain is measurable, but its processing overhead is far larger than the high-atlas GPU-work increment on this M2 scene. A matched high-atlas *presented-frame* timing was not measured, so this is not a quantified FPS speedup ratio. The offline temporal metric also remains worse than the cheap renderer. A next performance experiment needs either a genuinely expensive reference effect or a substantially cheaper native inference path; more training on the atlas task alone cannot create a performance advantage.
+
+### Residual-history test on new scenes, 2026-11-15
+
+[`evaluation/temporal_blend.py`](../evaluation/temporal_blend.py) now compares history of the entire RGB prediction with history of only the predicted correction (`prediction − cheap RGB`). It reprojects history with depth and rejects pixels that fail the existing visibility test. Candidate type and blend strength (0, 0.25, 0.5, 0.75) were selected on validation scenes 24–27 by the declared score `frame MAE + temporal error`. The selected setting was **correction history at 0.75**. The model and calibration bias were frozen.
+
+We then generated 48 pairs in four new scenes **36–39**. The dataset validator reported 48 matched pairs, zero cheap/reference sky-mask disagreement, and normal-length error at most 1.2×10⁻⁷. These scenes were not used for training, calibration, or history selection. On them, the cheap renderer's image MAE was **0.009874** and the unblended model's was **0.007514** (47/48 frames and 4/4 scenes improved). The model's unchanged-pixel MAE remained worse: **0.001841** versus cheap **0.000669**.
+
+| New scenes 36–39 | Cheap | Model | Correction history |
+|---|---:|---:|---:|
+| Image MAE ↓ | 0.009874 | **0.007514** | 0.007767 |
+| Reprojected temporal error ↓ | **0.005108** | 0.007516 | 0.005727 |
+
+Correction history improves temporal error by **23.8% relative to the unblended model**, with a **3.4% increase in model image MAE**. It does not yet match the cheap renderer's temporal stability. The measurement covers static scenes and 30° camera jumps only. It does not establish stability with moving objects, disocclusions in real gameplay, or real-time delivery. Dataset files and model checkpoints remain local.
+
+```sh
+DLSS66_SCENE_START=36 DLSS66_LAYOUTS=4 DLSS66_OUTPUT=dataset/temporal_test DLSS66_TASK=shadow_resolution sh collect_dataset.sh
+python3 -m evaluation.final_holdout --device mps --data dataset/temporal_test --kind shadow_refine_mask --mask-bias 1.5 --checkpoint artifacts/shadow_refine_mask_32.pt --output artifacts/shadow_refine_holdout_temporal_test.json
+python3 -m evaluation.temporal --data dataset/temporal_test --device mps --mask-bias 1.5
+python3 -m evaluation.temporal_blend --device mps --mask-bias 1.5 --test-data dataset/temporal_test
+```

@@ -8,4 +8,6 @@ dataset/shadow_resolution/*
 !dataset/shadow_resolution/.gdignore
 dataset/shadow_resolution_fresh/*
 !dataset/shadow_resolution_fresh/.gdignore
+dataset/temporal_test/*
+!dataset/temporal_test/.gdignore
 __pycache__/

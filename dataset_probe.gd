@@ -10,6 +10,7 @@ var output: RID
 var path := ""
 var pending := false
 var saved := false
+var latest_bytes := PackedByteArray()
 
 func _init() -> void:
 	effect_callback_type = EFFECT_CALLBACK_TYPE_POST_OPAQUE
@@ -37,6 +38,7 @@ func _setup() -> void:
 func arm(destination: String) -> void:
 	path = destination
 	saved = false
+	latest_bytes = PackedByteArray()
 	pending = true
 
 func _render_callback(_type: EffectCallbackType, data: RenderData) -> void:
@@ -80,6 +82,10 @@ func _render_callback(_type: EffectCallbackType, data: RenderData) -> void:
 func _on_data(bytes: PackedByteArray) -> void:
 	if bytes.size() != SIZE.x * SIZE.y * 16:
 		push_error("Dataset geometry byte count: " + str(bytes.size()))
+		return
+	if path.is_empty():
+		latest_bytes = bytes
+		saved = true
 		return
 	var file := FileAccess.open(path, FileAccess.WRITE)
 	if file == null:

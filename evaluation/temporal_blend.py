@@ -27,19 +27,25 @@ def prepare(root, split, model, device):
     return scenes
 
 
-def score(root, scenes, alpha):
+def score(root, scenes, alpha, mode="rgb"):
+    if mode not in {"rgb", "residual"}:
+        raise ValueError(mode)
     frame_mae = []
     temporal_errors = []
     scene_results = {}
     for scene, frames in scenes.items():
         outputs = []
-        for index, (row, _cheap, reference, predicted) in enumerate(frames):
+        for index, (row, cheap, reference, predicted) in enumerate(frames):
             output = predicted
             if index:
                 grid, visible = reprojection(root, row, frames[index - 1][0])
-                history = F.grid_sample(outputs[-1][None], grid, mode="bilinear",
+                previous = outputs[-1] if mode == "rgb" else outputs[-1] - frames[index - 1][1]
+                history = F.grid_sample(previous[None], grid, mode="bilinear",
                                         padding_mode="zeros", align_corners=False)[0]
-                output = torch.where(visible[None], (1 - alpha) * predicted + alpha * history, predicted)
+                current = predicted if mode == "rgb" else predicted - cheap
+                blended = (1 - alpha) * current + alpha * history
+                output = torch.where(visible[None], blended if mode == "rgb" else
+                                     torch.clamp(cheap + blended, 0, 1), predicted)
             outputs.append(output)
         scene_mae = []
         scene_temporal = []
@@ -68,15 +74,18 @@ def run(validation_root, test_root, checkpoint, device_name, mask_bias):
     model.mask_bias = mask_bias
     validation = prepare(validation_root, "validation", model, device)
     fresh_test = prepare(test_root, "test", model, device)
-    candidates = [0.0, 0.25, 0.5, 0.75]
-    validation_scores = {str(alpha): score(validation_root, validation, alpha) for alpha in candidates}
+    candidates = [("rgb", 0.0)] + [(mode, alpha) for mode in ("rgb", "residual")
+                                   for alpha in (0.25, 0.5, 0.75)]
+    validation_scores = {f"{mode}:{alpha}": score(validation_root, validation, alpha, mode)
+                         for mode, alpha in candidates}
     # Equal weight on image error and reprojected error is a declared choice, not a universal metric.
-    selected = min(candidates, key=lambda a: validation_scores[str(a)]["mae"] +
-                   validation_scores[str(a)]["temporal_error"])
-    result = {"device": str(device), "mask_bias": mask_bias, "selected_alpha": selected,
+    selected = min(candidates, key=lambda item: validation_scores[f"{item[0]}:{item[1]}"]["mae"] +
+                   validation_scores[f"{item[0]}:{item[1]}"]["temporal_error"])
+    result = {"device": str(device), "mask_bias": mask_bias,
+              "selected_mode": selected[0], "selected_alpha": selected[1],
               "validation": validation_scores,
               "fresh_test_no_history": score(test_root, fresh_test, 0.0),
-              "fresh_test_selected": score(test_root, fresh_test, selected)}
+              "fresh_test_selected": score(test_root, fresh_test, selected[1], selected[0])}
     print(json.dumps(result, indent=2))
     return result
 
