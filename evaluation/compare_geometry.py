@@ -15,7 +15,8 @@ from training.paired import ShadowPairs
 from training.train_pairs import build_model
 
 
-def run(device_name: str, output: Path) -> dict:
+def run(device_name: str, output: Path, geometry_checkpoint: Path = Path("artifacts/shadow_geometry_16.pt"),
+        model_kind: str = "geometry") -> dict:
     device = select_device(device_name)
     rgb_data = ShadowPairs(Path("dataset/raw"), "test")
     geometry_data = ShadowPairs(Path("dataset/raw"), "test", include_geometry=True)
@@ -23,9 +24,9 @@ def run(device_name: str, output: Path) -> dict:
     condition, _ = geometry_data[0]
     rgb, target, condition = (tensor.unsqueeze(0).to(device) for tensor in (rgb, target, condition))
     rgb_model = build_model("multiscale").to(device).eval()
-    geometry_model = build_model("geometry").to(device).eval()
+    geometry_model = build_model(model_kind).to(device).eval()
     rgb_model.load_state_dict(torch.load("artifacts/shadow_rgb_16.pt", map_location=device, weights_only=True)["model"])
-    geometry_model.load_state_dict(torch.load("artifacts/shadow_geometry_16.pt", map_location=device, weights_only=True)["model"])
+    geometry_model.load_state_dict(torch.load(geometry_checkpoint, map_location=device, weights_only=True)["model"])
     calls = {"rgb_only": lambda: rgb_model(rgb), "geometry": lambda: geometry_model(condition)}
     timings = {name: benchmark(call, device) for name, call in calls.items()}
     with torch.inference_mode():
@@ -57,6 +58,8 @@ def run(device_name: str, output: Path) -> dict:
     scene_means = {str(scene): {name: float(np.mean(values)) for name, values in scores.items()}
                    for scene, scores in by_scene.items()}
     result = {"device": str(device), "resolution": [rgb.shape[-1], rgb.shape[-2]],
+              "geometry_checkpoint": str(geometry_checkpoint),
+              "model_kind": model_kind,
               "montage_order": ["cheap", "reference", "rgb_model", "geometry_model",
                                 "rgb_error_x3", "geometry_error_x3"], "model_only": timings,
               "test_scene_mae": scene_means, "geometry_improved_pairs": improved,
@@ -70,5 +73,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--device", choices=("auto", "mps", "cuda", "cpu"), default="auto")
     parser.add_argument("--output", type=Path, default=Path("artifacts/geometry_comparison"))
+    parser.add_argument("--geometry-checkpoint", type=Path, default=Path("artifacts/shadow_geometry_16.pt"))
+    parser.add_argument("--model-kind", choices=("geometry", "geometry_mask"), default="geometry")
     args = parser.parse_args()
-    run(args.device, args.output)
+    run(args.device, args.output, args.geometry_checkpoint, args.model_kind)

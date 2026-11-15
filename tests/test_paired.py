@@ -8,11 +8,57 @@ import torch
 from PIL import Image
 
 from training.paired import ShadowPairs, evaluate
-from models.multiscale import MultiScaleRenderer
+from models.multiscale import MultiScaleRenderer, MaskedShadowRenderer, ShadowRefinementRenderer
 from models.one_step import ConditionalNet, cosine_alphas, ddim_sample
+from evaluation.temporal import reprojection
 
 
 class PairedTests(unittest.TestCase):
+    def test_identity_camera_reprojection(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            geometry = np.zeros((8, 12, 4), dtype="<f4")
+            near, far = 0.05, 100.0
+            geometry[:, :, 0] = (near * far - near) / (far - near)  # One meter.
+            geometry.tofile(root / "geometry.rgba32f")
+            row = {"geometry": "geometry.rgba32f", "resolution": [12, 8],
+                   "camera_near": near, "camera_far": far,
+                   "camera_position": [0, 0, 0], "look_at": [0, 0, -1], "camera_fov": 75.0}
+            grid, visible = reprojection(root, row, row)
+            yy, xx = np.mgrid[:8, :12]
+            self.assertTrue(visible[1:-1, 1:-1].all())
+            np.testing.assert_allclose(grid[0, :, :, 0], 2 * (xx + 0.5) / 12 - 1, atol=1e-5)
+            np.testing.assert_allclose(grid[0, :, :, 1], 2 * (yy + 0.5) / 8 - 1, atol=1e-5)
+
+    def test_refinement_starts_as_identity(self):
+        model = ShadowRefinementRenderer()
+        condition = torch.rand(1, 11, 16, 24)
+        output, logits = model.forward_with_mask(condition)
+        self.assertTrue(torch.equal(output, condition[:, :3]))
+        self.assertEqual(tuple(logits.shape), (1, 1, 16, 24))
+        output.mean().backward()
+        self.assertIsNotNone(model.strength_head.weight.grad)
+
+    def test_refinement_mask_bias_reduces_correction(self):
+        model = ShadowRefinementRenderer()
+        with torch.no_grad():
+            model.strength_head.bias.fill_(0.5)
+        condition = torch.full((1, 11, 16, 24), 0.5)
+        original = model(condition)
+        model.mask_bias = 1.5
+        calibrated = model(condition)
+        self.assertTrue(torch.all(calibrated - condition[:, :3] < original - condition[:, :3]))
+
+    def test_shadow_mask_output_only_darkens(self):
+        model = MaskedShadowRenderer()
+        condition = torch.rand(2, 11, 16, 24)
+        output, logits = model.forward_with_mask(condition)
+        self.assertEqual(tuple(output.shape), (2, 3, 16, 24))
+        self.assertEqual(tuple(logits.shape), (2, 1, 16, 24))
+        self.assertTrue(torch.all(output <= condition[:, :3]))
+        output.mean().backward()
+        self.assertIsNotNone(model.mask_head.weight.grad)
+
     def test_geometry_channels_and_identity(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

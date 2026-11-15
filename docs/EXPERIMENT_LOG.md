@@ -78,3 +78,83 @@ python3 -m evaluation.compare_geometry --device mps
 ```
 
 The first synchronized 30-sample model-only timing run at 256×144 measured mean 2.44 ms for RGB-only and 2.22 ms for geometry. A repeat measured means 3.12 and 2.91 ms, with p95 6.49 and 5.48 ms; the variation makes a speed ranking unjustified. These timings exclude Godot rendering, readback, tensor construction, and display. End-to-end FPS, peak memory, temporal stability, and a matched conventional shadow baseline remain unmeasured. The practical next experiment is to improve cross-scene coverage and penalize false shadow changes before returning to the one-step generator.
+
+## Cross-scene check of shadow creation and refinement, executed 2026-11-13–14
+
+We expanded the original shadow-off task to 40 scenes (480 frames). Scenes 0–11 and 16–31 trained the model, 12–13 selected checkpoints, 14–15 served as development, and fresh scenes 32–39 were held out. The masked 80,152-parameter model reached fresh-scene aggregate MAE **0.02742** versus **0.03371** for cheap RGB and PSNR **21.44** versus **19.30** dB. It improved only **4 of 8 scenes** and **59 of 96 frames**. The model still invented dark halos when shadows were weak. Reducing changed-pixel weight to 1 made a near-identity output; tuning the mask positive weight did not solve the held-out failure. The full local per-scene report is `artifacts/final_holdout_40.json`. This failure motivated a better specified task with an actual cheap shadow cue.
+
+The new `shadow_resolution` task has directional shadows in both input and reference. Godot 4.7.2 sets the cheap directional shadow atlas to 512 and the reference atlas to 4096 using `RenderingServer.directional_shadow_atlas_set_size`. The M2 capture completed for 32 scenes × 12 views = **384** aligned 256×144 RGB and geometry pairs. The scene split is 288 train, 48 validation, 48 test pairs. The validator found mean cheap/reference absolute difference **2.620/255**, 9.17% pixels changed by more than five levels, finite reverse-Z depth, unit normals with maximum length error 1.2×10⁻⁷, 0.765–9.332 m foreground depth, and zero sky-mask mismatch. The local dataset uses about 224 MiB. The 128-pixel atlas pilot had conspicuous striped artifacts, so 512 was selected for the full task; that selection used pilot views, not the test split. The reference is a conventional renderer choice, not physical truth.
+
+All models used the same 11 conditioning channels: cheap RGB, depth, normals, geometry-valid mask, and view-space light direction. A 20-epoch unmasked multiscale model with changed-pixel weight 4 stayed near identity. Raising that weight to 20 improved test PSNR but worsened MAE by altering unmodified regions. The selected model added a learned change mask and signed, mask-gated RGB correction. It trained for 20 epochs with seed 7, weighted L1 (`1+20×` on pixels changed by the reference), and a small supervised mask BCE term; the best checkpoint was chosen by validation MAE (epoch 20). Signed correction is necessary because the 512-to-4096 reference difference contains both darker and brighter pixels. The model has 80,152 parameters.
+
+| Fresh test, scenes 28–31 | Cheap 512 atlas | Masked neural refinement | High-quality 4096 atlas |
+|---|---:|---:|---:|
+| Whole-image MAE ↓ | 0.011364 | **0.010289** | 0 by definition |
+| PSNR dB ↑ | 27.344 | **29.954** | Reference |
+| Changed-pixel MAE ↓ | 0.103711 | **0.056796** | 0 |
+| Unchanged-pixel MAE ↓ | **0.000645** | 0.004890 | 0 |
+| Improved frames | — | 33 / 48 | — |
+| Improved scenes | — | 3 / 4 | — |
+
+Scene-level MAE: scene 28 **worsened** 0.005956→0.007295 (0/12 frames improved); scene 29 improved 0.010715→0.007891 (12/12); scene 30 improved 0.013346→0.011659 (12/12); scene 31 improved 0.015437→0.014309 (9/12). Visual inspection of `artifacts/shadow_refine_comparison.png` confirmed false darkening on the floor in scene 28. The aggregate gain is therefore **not robust cross-scene generalization** and does not establish a useful net performance gain. Repeated test inspection makes scenes 28–31 diagnostic data for future revisions; use new unseen scenes for final claims.
+
+Commands executed:
+
+```sh
+DLSS66_OUTPUT=dataset/shadow_resolution DLSS66_TASK=shadow_resolution DLSS66_LAYOUTS=32 sh collect_dataset.sh
+DLSS66_OUTPUT=dataset/shadow_resolution python3 validate_dataset.py
+python3 -m training.train_pairs --kind geometry --epochs 20 --data dataset/shadow_resolution --device mps --output artifacts/shadow_refine_geometry_32.pt
+python3 -m training.train_pairs --kind geometry --changed-weight 20 --epochs 20 --data dataset/shadow_resolution --device mps --output artifacts/shadow_refine_geometry_32_weight20.pt
+python3 -m training.train_pairs --kind shadow_refine_mask --changed-weight 20 --epochs 20 --data dataset/shadow_resolution --device mps --output artifacts/shadow_refine_mask_32.pt
+python3 -m evaluation.final_holdout --data dataset/shadow_resolution --kind shadow_refine_mask --checkpoint artifacts/shadow_refine_mask_32.pt --output artifacts/shadow_refine_holdout_32.json --device mps
+python3 -m evaluation.visualize_refinement --device mps
+python3 -m evaluation.benchmark_refinement --device mps --warmup 10 --samples 100
+python3 -m unittest discover -s tests -q
+```
+
+The final unit run passed **9 tests**. The synchronized M2 benchmark at 256×144 measured model-only mean **2.854 ms**, median **2.303 ms**, p95 **4.434 ms** over 100 samples. A separately timed path starting with an already decoded CPU tensor and ending with a CPU output tensor measured mean **2.939 ms**, median **2.666 ms**, p95 **3.873 ms**. These distributions overlap; do not subtract the means to estimate transfer cost. Neither path includes PNG decode, Godot rendering, GPU texture readback, compositing, display, or GPU contention with the game.
+
+We also attempted a direct matched renderer timing with the pinned Godot 4.7.2 app:
+
+```sh
+DLSS66_VARIANT=cheap DLSS66_TASK=shadow_resolution DLSS66_BENCHMARK=1 tools/Godot.app/Contents/MacOS/Godot --path . -- --dataset
+```
+
+The script reused one static scene and camera, alternated 512 and 4096 atlas sizes, warmed each condition for 40 frames, and sampled 100 frames with `RenderingServer.viewport_get_measured_render_time_gpu` and its CPU counterpart. GPU time was **0.0 ms on every sample**, including a second attempt with `RenderingServer.force_draw()` each frame. The CPU-only render-time counter varied between repeated blocks, so it cannot establish which atlas is faster. Godot's [4.7 API](https://docs.godotengine.org/en/4.7/classes/class_renderingserver.html) documents these counters, but this M2 Metal run did not yield usable GPU measurements. The measured counters exclude ML inference. A Metal GPU capture or another verified GPU timing method is needed. No matched 512-atlas vs 4096-atlas render-time result or end-to-end FPS exists yet.
+
+During review, benchmark mode was found to open the default cheap manifest before branching, truncating that local file. The branch now runs before any manifest is opened. `sh collect_dataset.sh` regenerated and validated all 480 original pairs, and a subsequent benchmark left `manifest_cheap.jsonl` at 480 lines. No generated dataset files are committed.
+
+### Validation-calibrated correction and new unseen scenes, 2026-11-14
+
+The raw refinement model's mask still produced false corrections. [`evaluation/calibrate_mask.py`](../evaluation/calibrate_mask.py) tested logit biases 0, 0.5, 1, 1.5, 2, and 3 **on validation scenes 24–27 only** and chose bias **1.5** by lowest mean validation MAE (0.008138 versus 0.009529 at zero bias). No network weights changed. [`ShadowRefinementRenderer`](../models/multiscale.py) applies `sigmoid(mask_logits − 1.5)` at inference. On the already inspected test scenes 28–31, recalculation with the direct model forward pass yielded MAE **0.008868** versus cheap **0.011364**, PSNR **30.121** versus 27.344 dB, and improvement on **4/4 scenes and 42/48 frames**. Unchanged-pixel MAE was still worse than cheap (0.002238 versus 0.000645).
+
+Because scenes 28–31 had already been inspected, we generated **four new scenes 32–35** into a separate local directory using the same fixed architecture and bias. The 48 fresh pairs passed the RGB/geometry validator: mean cheap/reference difference 2.630/255, 8.65% changed pixels, 0.791–9.332 m depth, normal-length error at most 1.2×10⁻⁷, zero sky-mask mismatch. **No fitting or calibration used these four scenes.**
+
+| Fresh scenes 32–35 | Cheap 512 atlas | Calibrated model |
+|---|---:|---:|
+| Whole-image MAE ↓ | 0.010314 | **0.007360** |
+| PSNR dB ↑ | 27.474 | **30.428** |
+| Changed-pixel MAE ↓ | 0.112534 | **0.067825** |
+| Unchanged-pixel MAE ↓ | **0.000591** | 0.001608 |
+| Improved scenes / frames | — | **4/4; 47/48** |
+
+The comparison at `artifacts/shadow_refine_fresh_comparison.png` was inspected for frame 0 of each scene. Shadows are sharper and mostly align with the high-atlas reference, but errors remain around contact edges. This establishes improvement within the current procedural scene family, not generalization to different game art, materials, or lighting. The increase in unchanged-pixel error means false appearance changes are reduced by calibration, not eliminated.
+
+```sh
+python3 -m evaluation.calibrate_mask --kind shadow_refine_mask --data dataset/shadow_resolution --checkpoint artifacts/shadow_refine_mask_32.pt --output artifacts/shadow_refine_calibration_32.json --device mps
+DLSS66_SCENE_START=32 DLSS66_LAYOUTS=4 DLSS66_OUTPUT=dataset/shadow_resolution_fresh DLSS66_TASK=shadow_resolution sh collect_dataset.sh
+python3 -m evaluation.final_holdout --device mps --data dataset/shadow_resolution_fresh --kind shadow_refine_mask --mask-bias 1.5 --checkpoint artifacts/shadow_refine_mask_32.pt --output artifacts/shadow_refine_holdout_fresh.json
+python3 -m evaluation.visualize_refinement --data dataset/shadow_resolution_fresh --scenes 32 33 34 35 --mask-bias 1.5 --output artifacts/shadow_refine_fresh_comparison.png --device mps
+```
+
+### Offline temporal probe, 2026-11-14
+
+The 12 camera poses form 30° steps around **static** scenes. [`evaluation/temporal.py`](../evaluation/temporal.py) reconstructs world positions from exported reverse-Z depth, reprojects them to the next camera, and rejects out-of-view and depth-inconsistent pixels (5 cm tolerance). An identity-camera reprojection unit test passed. The metric is the mean change in **prediction error relative to the reference** across corresponding visible surface pixels. About 51–56% of source pixels survived per scene. This is a controlled, offline proxy; it is not moving-object video or presentation timing.
+
+On fresh scenes 32–35, the cheap renderer's error-change metric was **0.005065**; the calibrated model's was **0.007515**. The model is less temporally stable by this measure despite its better frame MAE. A depth-rejected history baseline then warped the previous output and blended 25% of it into the current output on visible surfaces. Blend strength was chosen from 0/0.25/0.5/0.75 using `validation MAE + validation temporal error`, without using fresh test scenes. On fresh scenes it lowered the model's temporal error from **0.007515 to 0.007243**, but increased image MAE from **0.007360 to 0.007780**. It still did not match the cheap renderer's temporal error. A real solution needs smoother trajectories, moving objects, engine motion vectors, disocclusion checks, and end-to-end latency measurements.
+
+```sh
+python3 -m evaluation.temporal --data dataset/shadow_resolution_fresh --device mps --mask-bias 1.5
+python3 -m evaluation.temporal_blend --device mps --mask-bias 1.5
+python3 -m unittest discover -s tests -q  # 11 tests passed
+```

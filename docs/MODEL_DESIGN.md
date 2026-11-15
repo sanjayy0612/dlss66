@@ -1,6 +1,6 @@
 # Model design and tensor operations
 
-Decision: compare a deterministic RGB residual CNN, a small multiscale encoder-decoder, and a conditional diffusion teacher distilled to one call. On the original 96-pair RGB dataset, none beat the cheap input on test MAE. The later 192-pair dataset adds geometry and light direction; a matched geometry-conditioned multiscale model improved aggregate test metrics but not every scene. See [EXPERIMENT_LOG.md](EXPERIMENT_LOG.md).
+Decision: compare a deterministic RGB residual CNN, a small multiscale encoder-decoder, and a conditional diffusion teacher distilled to one call. On the original 96-pair RGB dataset, none beat the cheap input on test MAE. Later geometry-conditioned models improved aggregate test metrics but still failed on some scenes. The current focused task is to refine an existing low-resolution shadow cue. See [EXPERIMENT_LOG.md](EXPERIMENT_LOG.md).
 
 ## Model A: implemented residual CNN
 
@@ -31,6 +31,16 @@ RGB residual is the best first representation because existing Godot RGB capture
 The implemented [MultiScaleRenderer](../models/multiscale.py) accepts `B×3×144×256` RGB. Its encoder produces 12 channels at 144×256, 16 at 72×128, 24 at 36×64, and 32 at 18×32. Bilinear upsampling and skip concatenation restore full resolution. A 3-channel head predicts a bounded RGB residual. It has 79,179 parameters. It was trained with the same loss and split as Model A. It stayed close to identity on the held-out scene, so larger receptive field alone did not solve shadow placement.
 
 The same backbone can now accept `B×11×144×256` conditioning: 3 RGB channels, 1 depth channel (linear meters divided by 10 and clipped), 3 decoded view-normal channels, 1 valid-depth mask, and 3 spatially constant view-space light-direction channels. The first three channels are also the skip-connected RGB output base. This variant has 80,043 parameters. It used the same 20 epochs, weighted L1 loss, validation selection, and 16-layout split as the matched RGB-only backbone. Its changed-pixel test error fell from 0.3075 for the cheap input to 0.1239, but its unchanged-pixel error rose to 0.0261. This is a useful but imperfect shadow predictor; it worsened one of the two held-out scene layouts.
+
+## Current masked shadow-refinement model
+
+[`ShadowRefinementRenderer`](../models/multiscale.py) uses the same 11-channel input and multiscale features as Model B. A 1-channel `mask_head` predicts logits `m`; a 3-channel `strength_head` predicts signed RGB values `s`. The output is `clamp(cheap_RGB + 0.6 sigmoid(m) tanh(s), 0, 1)`. The mask has shape `B×1×H×W` and broadcasts over the three color channels. The correction has shape `B×3×H×W`. Both heads are learned 3×3 convolutions; the strength head is zero initialized so the network starts with unchanged RGB. The model has **80,152 parameters**.
+
+The mask is supervised using pixels where cheap and reference differ by more than 5/255 in any channel. Training also uses L1 loss with weight `1+20×` on these pixels. This is ordinary deterministic regression. The mask has no hard guarantee against false positives, and the higher changed-pixel weight encourages changing some pixels that should stay alone. On four held-out scenes, the model improved aggregate MAE and PSNR but worsened one entire low-change scene. Its unchanged-pixel MAE rose from 0.000645 for cheap RGB to 0.004890. The false correction is visible on the floor in the saved comparison image. We cannot call this robust cross-scene rendering or a cost-effective game effect yet.
+
+The choice of an existing low-resolution shadow cue narrows the inference problem: the network refines plausible shadow edges rather than deriving unseen occlusion from a single depth/normal view. It also means the cheap renderer already pays for a shadow pass. The practical test must compare `512 atlas + model` against a conventional atlas size of similar total render cost, including capture and handoff.
+
+After fitting, one scalar mask-logit bias was selected on validation scenes. The deployed expression is `clamp(cheap_RGB + 0.6 sigmoid(m−1.5) tanh(s), 0, 1)`. No parameters were retrained. On four new procedural scenes it reduced MAE relative to cheap RGB in 47/48 frames, but the unchanged-pixel error remained above cheap RGB. Offline depth-reprojected temporal error was also worse than cheap RGB. A simple history blend helped that error slightly while increasing image MAE. Thus the current model is a useful spatial baseline with an unresolved temporal and end-to-end cost problem.
 
 ## Model C: implemented diffusion-distillation experiment
 

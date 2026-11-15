@@ -8,12 +8,13 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-ROOT = Path(__file__).resolve().parent / "dataset" / "raw"
+ROOT = Path(__file__).resolve().parent / os.getenv("DLSS66_OUTPUT", "dataset/raw")
 
 
 def load(variant):
     records = [json.loads(line) for line in (ROOT / f"manifest_{variant}.jsonl").read_text().splitlines()]
-    assert len(records) == int(os.getenv("DLSS66_LAYOUTS", "16")) * int(os.getenv("DLSS66_FRAMES", "12")), (
+    default_layouts = "32" if records[0]["effect"].startswith("Shadow atlas") else "40"
+    assert len(records) == int(os.getenv("DLSS66_LAYOUTS", default_layouts)) * int(os.getenv("DLSS66_FRAMES", "12")), (
         variant, len(records)
     )
     by_key = {}
@@ -41,8 +42,15 @@ for key in sorted(cheap):
     for field in ("seed", "camera_position", "look_at", "effect", "resolution",
                   "camera_near", "camera_far", "light_rotation_degrees", "light_direction_view"):
         assert a_meta[field] == b_meta[field], (key, field)
+    cheap_atlas = a_meta.get("shadow_atlas_size", 4096)
+    reference_atlas = b_meta.get("shadow_atlas_size", 4096)
+    assert cheap_atlas <= reference_atlas, key
     scene = key[0]
-    split = "train" if scene < 12 else "validation" if scene < 14 else "test"
+    if a_meta["effect"].startswith("Shadow atlas"):
+        split = "train" if scene < 24 else "validation" if scene < 28 else "test"
+    else:
+        split = ("validation" if scene in (12, 13) else "development" if scene in (14, 15)
+                 else "test" if scene >= 32 else "train")
     splits[split] += 1
     a = np.asarray(Image.open(ROOT / a_meta["image"]).convert("RGB"), dtype=np.int16)
     b = np.asarray(Image.open(ROOT / b_meta["image"]).convert("RGB"), dtype=np.int16)
@@ -87,7 +95,9 @@ for key in sorted(cheap):
                     "resolution": a_meta["resolution"], "geometry": a_meta["geometry"],
                     "camera_near": near, "camera_far": far,
                     "light_rotation_degrees": a_meta["light_rotation_degrees"],
-                    "light_direction_view": a_meta["light_direction_view"]})
+                    "light_direction_view": a_meta["light_direction_view"],
+                    "cheap_shadow_atlas_size": cheap_atlas,
+                    "reference_shadow_atlas_size": reference_atlas})
     if len(records) == 1:
         depth_vis = np.zeros((144, 256), dtype=np.uint8)
         depth_vis[valid] = np.uint8(np.clip(meters / np.percentile(meters, 95), 0, 1) * 255)
@@ -105,6 +115,8 @@ summary = {"pairs": len(records), "scenes": len({r["scene_id"] for r in records}
            "depth_meters_range": [min(x[0] for x in depth_ranges), max(x[1] for x in depth_ranges)],
            "max_normal_length_error": max(normal_errors),
            "max_cheap_reference_sky_mask_disagreement": max(sky_disagreements),
+           "cheap_shadow_atlas_size": records[0]["cheap_shadow_atlas_size"],
+           "reference_shadow_atlas_size": records[0]["reference_shadow_atlas_size"],
            "effect": records[0]["effect"]}
 (ROOT / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
 print("DATASET_VALIDATION", json.dumps(summary))

@@ -36,7 +36,23 @@ With the same pinned Godot app and Python packages NumPy and Pillow, run:
 sh collect_dataset.sh
 ```
 
-This generates 192 local RGB pairs at 256×144 in ignored `dataset/raw/`, plus depth/normal geometry for each cheap frame, `manifest.jsonl`, and `summary.json`. Each pair uses the same procedural scene and camera; the cheap pass has directional shadows off and the reference pass has them on. Scene IDs 0–11 are training, 12–13 validation, and 14–15 test. See [DATASET.md](docs/DATASET.md) for the exact format, validation results, and limitations. This is a small supervised shadow reconstruction dataset, not a DLSS 5 dataset.
+This generates 480 local RGB pairs at 256×144 in ignored `dataset/raw/`, plus depth/normal geometry for each cheap frame, `manifest.jsonl`, and `summary.json`. Each pair uses the same procedural scene and camera; the cheap pass has directional shadows off and the reference pass has them on. The split is 336 train, 24 validation, 24 development, and 96 fresh test frames by scene. See [DATASET.md](docs/DATASET.md) for the exact format, validation results, and limitations. This is a small supervised shadow reconstruction dataset, not a DLSS 5 dataset.
+
+The current, narrower shadow-refinement task preserves low-resolution shadows in the cheap input and uses a higher-resolution shadow atlas as the reference:
+
+```sh
+DLSS66_OUTPUT=dataset/shadow_resolution DLSS66_TASK=shadow_resolution DLSS66_LAYOUTS=32 sh collect_dataset.sh
+python3 -m training.train_pairs --kind shadow_refine_mask --changed-weight 20 --epochs 20 --data dataset/shadow_resolution --device auto --output artifacts/shadow_refine_mask_32.pt
+python3 -m evaluation.final_holdout --data dataset/shadow_resolution --kind shadow_refine_mask --checkpoint artifacts/shadow_refine_mask_32.pt --output artifacts/shadow_refine_holdout_32.json --device auto
+python3 -m evaluation.calibrate_mask --kind shadow_refine_mask --data dataset/shadow_resolution --checkpoint artifacts/shadow_refine_mask_32.pt --device auto
+DLSS66_SCENE_START=32 DLSS66_LAYOUTS=4 DLSS66_OUTPUT=dataset/shadow_resolution_fresh DLSS66_TASK=shadow_resolution sh collect_dataset.sh
+python3 -m evaluation.final_holdout --data dataset/shadow_resolution_fresh --kind shadow_refine_mask --mask-bias 1.5 --checkpoint artifacts/shadow_refine_mask_32.pt --output artifacts/shadow_refine_holdout_fresh.json --device auto
+python3 -m evaluation.temporal_blend --device auto --mask-bias 1.5
+python3 -m evaluation.benchmark_refinement --device auto
+python3 -m evaluation.visualize_refinement --data dataset/shadow_resolution_fresh --scenes 32 33 34 35 --mask-bias 1.5 --device auto
+```
+
+On the M2, the 80,152-parameter model reduced uncalibrated test MAE from 0.01136 to 0.01029 but initially worsened one scene. Validation-only mask calibration selected bias 1.5; on **four newly captured scenes**, it reduced MAE from 0.01031 to 0.00736 and improved 47/48 frames. An offline reprojection check found worse temporal error than the cheap renderer; a simple history blend partly reduced that error at a cost to image MAE. The benchmark excludes Godot rendering and display, so no end-to-end speedup is established. See [EXPERIMENT_LOG.md](docs/EXPERIMENT_LOG.md).
 
 ## Shadow-model experiments
 
@@ -59,4 +75,4 @@ python3 -m training.train_pairs --kind geometry --epochs 20 --device auto --outp
 python3 -m evaluation.compare_geometry --device auto
 ```
 
-The geometry model takes RGB, depth, view normals, a valid-depth mask, and view-space light direction. It improved aggregate held-out image error, but did not improve every scene. Its checkpoint and comparison image remain local in `artifacts/`.
+The geometry model takes RGB, depth, view normals, a valid-depth mask, and view-space light direction. It improved aggregate held-out image error, but did not improve every scene. Its checkpoint and comparison image remain local in `artifacts/`. This older, harder shadow-creation task remains a useful failure case.

@@ -1,9 +1,9 @@
 extends Node3D
 
 const SIZE := Vector2i(256, 144)
-const LAYOUTS := 16
+const LAYOUTS := 40
 const FRAMES := 12
-const OUTPUT := "res://dataset/raw"
+var output_dir := "res://dataset/raw"
 
 var world_root: Node3D
 var camera: Camera3D
@@ -12,20 +12,24 @@ var sun: DirectionalLight3D
 var probe
 var manifest: FileAccess
 var variant: String
+var task: String
+var shadow_atlas_size: int
 
 func _ready() -> void:
 	get_window().size = SIZE
 	variant = OS.get_environment("DLSS66_VARIANT")
+	task = OS.get_environment("DLSS66_TASK") if OS.has_environment("DLSS66_TASK") else "shadow_off"
+	output_dir = "res://" + OS.get_environment("DLSS66_OUTPUT") if OS.has_environment("DLSS66_OUTPUT") else output_dir
 	if variant != "cheap" and variant != "reference":
 		push_error("Set DLSS66_VARIANT to cheap or reference")
 		get_tree().quit(1)
 		return
-	DirAccess.make_dir_recursive_absolute(OUTPUT)
-	manifest = FileAccess.open(OUTPUT + "/manifest_" + variant + ".jsonl", FileAccess.WRITE)
-	if manifest == null:
-		push_error("Cannot open dataset manifest")
+	if task != "shadow_off" and task != "shadow_resolution":
+		push_error("Unknown dataset task: " + task)
 		get_tree().quit(1)
 		return
+	shadow_atlas_size = (512 if variant == "cheap" else 4096) if task == "shadow_resolution" else 4096
+	RenderingServer.directional_shadow_atlas_set_size(shadow_atlas_size, true)
 	world_root = Node3D.new()
 	add_child(world_root)
 	camera = Camera3D.new()
@@ -42,6 +46,16 @@ func _ready() -> void:
 	environment.ssao_enabled = true
 	environment.ssao_intensity = 0.0
 	camera.environment = environment
+	if OS.has_environment("DLSS66_BENCHMARK"):
+		await benchmark_shadow_atlas()
+		get_tree().quit(0)
+		return
+	DirAccess.make_dir_recursive_absolute(output_dir)
+	manifest = FileAccess.open(output_dir + "/manifest_" + variant + ".jsonl", FileAccess.WRITE)
+	if manifest == null:
+		push_error("Cannot open dataset manifest")
+		get_tree().quit(1)
+		return
 	if variant == "cheap":
 		var compositor := Compositor.new()
 		probe = preload("res://dataset_probe.gd").new()
@@ -49,9 +63,11 @@ func _ready() -> void:
 		camera.compositor = compositor
 	var layouts := mini(LAYOUTS, maxi(1, int(OS.get_environment("DLSS66_LAYOUTS")) if OS.has_environment("DLSS66_LAYOUTS") else LAYOUTS))
 	var frames := mini(FRAMES, maxi(1, int(OS.get_environment("DLSS66_FRAMES")) if OS.has_environment("DLSS66_FRAMES") else FRAMES))
-	for scene_id in range(layouts):
+	var scene_start := maxi(0, int(OS.get_environment("DLSS66_SCENE_START")) if OS.has_environment("DLSS66_SCENE_START") else 0)
+	for scene_id in range(scene_start, scene_start + layouts):
 		make_layout(scene_id)
-		DirAccess.make_dir_recursive_absolute(OUTPUT + "/scene_%02d" % scene_id)
+		var scene_seed := (2000 if task == "shadow_resolution" else 1000) + scene_id
+		DirAccess.make_dir_recursive_absolute(output_dir + "/scene_%02d" % scene_id)
 		for frame_id in range(frames):
 			var angle := 0.2 + TAU * float(frame_id) / float(FRAMES)
 			camera.position = Vector3(cos(angle) * 3.1, 2.7, sin(angle) * 3.1)
@@ -63,7 +79,7 @@ func _ready() -> void:
 			var geometry_path := stem + "_geometry.rgba32f"
 			if variant == "cheap":
 				probe.saved = false
-				RenderingServer.call_on_render_thread(probe.arm.bind(OUTPUT + "/" + geometry_path))
+				RenderingServer.call_on_render_thread(probe.arm.bind(output_dir + "/" + geometry_path))
 				for wait_frame in range(90):
 					RenderingServer.force_draw()
 					await get_tree().process_frame
@@ -79,7 +95,7 @@ func _ready() -> void:
 					return
 			RenderingServer.force_draw()
 			var image := get_viewport().get_texture().get_image()
-			var path: String = OUTPUT + "/" + stem + "_" + variant + ".png"
+			var path: String = output_dir + "/" + stem + "_" + variant + ".png"
 			var err := image.save_png(path)
 			if err != OK or image.get_size() != SIZE:
 				push_error("Capture failed: " + path)
@@ -91,13 +107,15 @@ func _ready() -> void:
 				get_tree().quit(1)
 				return
 			var record := {"scene_id": scene_id, "frame_id": frame_id,
-				"seed": 1000 + scene_id, "camera_position": [camera.position.x, camera.position.y, camera.position.z],
+				"seed": scene_seed, "camera_position": [camera.position.x, camera.position.y, camera.position.z],
 				"look_at": [0.0, 0.65, 0.0], "variant": variant, "image": stem + "_" + variant + ".png",
 				"geometry": geometry_path if variant == "cheap" else "",
 				"camera_near": camera.near, "camera_far": camera.far,
 				"light_rotation_degrees": [sun.rotation_degrees.x, sun.rotation_degrees.y, sun.rotation_degrees.z],
 				"light_direction_view": [light_view.x, light_view.y, light_view.z],
-				"effect": "Directional shadows off versus on", "resolution": [SIZE.x, SIZE.y]}
+				"shadow_atlas_size": shadow_atlas_size,
+				"effect": "Shadow atlas 512 versus 4096" if task == "shadow_resolution" else "Directional shadows off versus on",
+				"resolution": [SIZE.x, SIZE.y]}
 			manifest.store_line(JSON.stringify(record))
 			manifest.flush()
 		print("DATASET_LAYOUT variant=", variant, " scene=", scene_id, " frames=", frames)
@@ -109,12 +127,46 @@ func _ready() -> void:
 	print("DATASET_COMPLETE variant=", variant, " frames=", layouts * frames)
 	get_tree().quit(0)
 
+func benchmark_shadow_atlas() -> void:
+	# Reuse the dataset scene and viewport, without readback or PNG encoding.
+	make_layout(28)
+	camera.position = Vector3(cos(0.2) * 3.1, 2.7, sin(0.2) * 3.1)
+	camera.look_at(Vector3(0, 0.65, 0))
+	var viewport_rid := get_viewport().get_viewport_rid()
+	RenderingServer.viewport_set_measure_render_time(viewport_rid, true)
+	for atlas_size in [512, 4096, 512, 4096]:
+		RenderingServer.directional_shadow_atlas_set_size(atlas_size, true)
+		for _warmup in range(40):
+			RenderingServer.force_draw()
+			await get_tree().process_frame
+		var gpu_times: Array[float] = []
+		var cpu_times: Array[float] = []
+		for _sample in range(100):
+			RenderingServer.force_draw()
+			await get_tree().process_frame
+			gpu_times.append(RenderingServer.viewport_get_measured_render_time_gpu(viewport_rid))
+			cpu_times.append(RenderingServer.viewport_get_measured_render_time_cpu(viewport_rid))
+		gpu_times.sort()
+		cpu_times.sort()
+		var gpu_sum := 0.0
+		var cpu_sum := 0.0
+		for value in gpu_times:
+			gpu_sum += value
+		for value in cpu_times:
+			cpu_sum += value
+		print("ATLAS_BENCHMARK size=", atlas_size,
+			" gpu_mean_ms=", gpu_sum / gpu_times.size(),
+			" gpu_p50_ms=", gpu_times[50], " gpu_p95_ms=", gpu_times[95],
+			" cpu_mean_ms=", cpu_sum / cpu_times.size(),
+			" cpu_p50_ms=", cpu_times[50], " cpu_p95_ms=", cpu_times[95])
+	RenderingServer.viewport_set_measure_render_time(viewport_rid, false)
+
 func make_layout(scene_id: int) -> void:
 	for child in world_root.get_children():
 		world_root.remove_child(child)
 		child.queue_free()
 	var rng := RandomNumberGenerator.new()
-	rng.seed = 1000 + scene_id
+	rng.seed = (2000 if task == "shadow_resolution" else 1000) + scene_id
 	make_box(Vector3(0, -0.15, 0), Vector3(9, 0.3, 9), Color(rng.randf_range(0.35, 0.65), rng.randf_range(0.35, 0.65), rng.randf_range(0.35, 0.65)))
 	make_box(Vector3(0, 1.7, -4.3), Vector3(9, 3.4, 0.3), Color(0.67, 0.61, 0.53))
 	make_box(Vector3(-4.3, 1.7, 0), Vector3(0.3, 3.4, 9), Color(0.57, 0.64, 0.68))
@@ -137,7 +189,7 @@ func make_layout(scene_id: int) -> void:
 				make_mesh(sphere, Vector3(pos.x, sphere.radius, pos.z), color)
 	sun = DirectionalLight3D.new()
 	sun.rotation_degrees = Vector3(rng.randf_range(-70, -35), rng.randf_range(-100, 15), 0)
-	sun.shadow_enabled = variant == "reference"
+	sun.shadow_enabled = task == "shadow_resolution" or variant == "reference"
 	world_root.add_child(sun)
 
 func make_box(pos: Vector3, size: Vector3, color: Color) -> void:

@@ -23,15 +23,24 @@ def build_model(kind: str):
     if kind == "geometry":
         from models.multiscale import MultiScaleRenderer
         return MultiScaleRenderer(max_delta=0.6, condition_channels=11)
+    if kind == "geometry_mask":
+        from models.multiscale import MaskedShadowRenderer
+        return MaskedShadowRenderer()
+    if kind == "shadow_refine_mask":
+        from models.multiscale import ShadowRefinementRenderer
+        return ShadowRefinementRenderer()
     raise ValueError(kind)
 
 
-def run(kind: str, epochs: int, device_name: str, root: Path, output: Path, seed: int = 7):
+def run(kind: str, epochs: int, device_name: str, root: Path, output: Path,
+        seed: int = 7, changed_weight: float = 4.0, mask_pos_weight: float = 2.0):
+    if changed_weight < 0 or mask_pos_weight <= 0:
+        raise ValueError("loss weights must be valid")
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     device = select_device(device_name)
-    use_geometry = kind == "geometry"
+    use_geometry = kind in {"geometry", "geometry_mask", "shadow_refine_mask"}
     train = ShadowPairs(root, "train", include_geometry=use_geometry)
     validation = ShadowPairs(root, "validation", include_geometry=use_geometry)
     test = ShadowPairs(root, "test", include_geometry=use_geometry)
@@ -49,10 +58,19 @@ def run(kind: str, epochs: int, device_name: str, root: Path, output: Path, seed
         losses = []
         for x, y in loader:
             x, y = x.to(device), y.to(device)
-            prediction = model(x)
+            if kind in {"geometry_mask", "shadow_refine_mask"}:
+                prediction, mask_logits = model.forward_with_mask(x)
+            else:
+                prediction = model(x)
             changed = ((x[:, :3] - y).abs().amax(dim=1, keepdim=True) > 5 / 255).float()
-            weights = 1 + 4 * changed
+            weights = 1 + changed_weight * changed
             loss = (weights * (prediction - y).abs()).mean()
+            if kind in {"geometry_mask", "shadow_refine_mask"}:
+                difference = x[:, :3] - y
+                shadow_target = ((difference if kind == "geometry_mask" else difference.abs())
+                                 .amax(dim=1, keepdim=True) > 5 / 255).float()
+                loss = loss + 0.05 * F.binary_cross_entropy_with_logits(
+                    mask_logits, shadow_target, pos_weight=torch.tensor(mask_pos_weight, device=device))
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
             optimizer.step()
@@ -68,6 +86,8 @@ def run(kind: str, epochs: int, device_name: str, root: Path, output: Path, seed
     state = torch.load(output, map_location=device, weights_only=True)
     model.load_state_dict(state["model"])
     result = {"kind": kind, "device": str(device), "epochs": epochs,
+              "changed_weight": changed_weight,
+              "mask_pos_weight": mask_pos_weight if kind in {"geometry_mask", "shadow_refine_mask"} else None,
               "parameters": sum(p.numel() for p in model.parameters()),
               "best_epoch": state["epoch"], "input": baseline,
               "model": {"validation": evaluate(model, validation, device),
@@ -79,12 +99,15 @@ def run(kind: str, epochs: int, device_name: str, root: Path, output: Path, seed
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--kind", choices=("cnn", "multiscale", "geometry"), default="cnn")
+    parser.add_argument("--kind", choices=("cnn", "multiscale", "geometry", "geometry_mask", "shadow_refine_mask"), default="cnn")
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--device", choices=("auto", "mps", "cuda", "cpu"), default="auto")
     parser.add_argument("--data", type=Path, default=Path("dataset/raw"))
     parser.add_argument("--output", type=Path, default=Path("artifacts/shadow_cnn.pt"))
+    parser.add_argument("--changed-weight", type=float, default=4.0)
+    parser.add_argument("--mask-pos-weight", type=float, default=2.0)
     args = parser.parse_args()
-    if args.epochs < 1:
-        parser.error("epochs must be positive")
-    run(args.kind, args.epochs, args.device, args.data, args.output)
+    if args.epochs < 1 or args.changed_weight < 0 or args.mask_pos_weight <= 0:
+        parser.error("invalid epochs or loss weights")
+    run(args.kind, args.epochs, args.device, args.data, args.output,
+        changed_weight=args.changed_weight, mask_pos_weight=args.mask_pos_weight)

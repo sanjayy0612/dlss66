@@ -4,4 +4,8 @@ tools/
 artifacts/
 dataset/raw/*
 !dataset/raw/.gdignore
+dataset/shadow_resolution/*
+!dataset/shadow_resolution/.gdignore
+dataset/shadow_resolution_fresh/*
+!dataset/shadow_resolution_fresh/.gdignore
 __pycache__/
