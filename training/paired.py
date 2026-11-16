@@ -55,14 +55,23 @@ def evaluate(model, dataset: ShadowPairs, device: torch.device) -> dict:
         model.eval()
     absolute = squared = changed_absolute = unchanged_absolute = 0.0
     channels = changed_channels = unchanged_channels = 0
+    unchanged_pixels = false_modify_2px = false_darken_2px = false_darken_5px = 0
     for cheap, reference in dataset:
         x = cheap.unsqueeze(0).to(device)
         y = reference.unsqueeze(0).to(device)
         rgb = x[:, :3]
         prediction = rgb if model is None else model(x)
         error = (prediction - y).abs()
-        changed = (rgb - y).abs().amax(dim=1, keepdim=True) > (5 / 255)
-        changed = changed.expand_as(error)
+        changed_pixels = (rgb - y).abs().amax(dim=1, keepdim=True) > (5 / 255)
+        changed = changed_pixels.expand_as(error)
+        correction = prediction - rgb
+        untouched = ~changed_pixels
+        magnitude = correction.abs().amax(dim=1, keepdim=True)
+        darkening = (-correction).amax(dim=1, keepdim=True)
+        unchanged_pixels += untouched.sum().item()
+        false_modify_2px += ((magnitude > 2 / 255) & untouched).sum().item()
+        false_darken_2px += ((darkening > 2 / 255) & untouched).sum().item()
+        false_darken_5px += ((darkening > 5 / 255) & untouched).sum().item()
         absolute += error.sum().item()
         squared += error.square().sum().item()
         changed_absolute += error[changed].sum().item()
@@ -74,4 +83,7 @@ def evaluate(model, dataset: ShadowPairs, device: torch.device) -> dict:
     return {"mae": absolute / channels, "psnr_db": -10 * np.log10(mse),
             "changed_mae": changed_absolute / changed_channels,
             "unchanged_mae": unchanged_absolute / unchanged_channels,
+            "unchanged_modify_rate_gt_2_255": false_modify_2px / unchanged_pixels,
+            "unchanged_darken_rate_gt_2_255": false_darken_2px / unchanged_pixels,
+            "unchanged_darken_rate_gt_5_255": false_darken_5px / unchanged_pixels,
             "pairs": len(dataset)}

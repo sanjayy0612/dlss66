@@ -30,35 +30,60 @@ def collect(model, dataset, device):
     return rows
 
 
-def score(rows, bias):
+def score(rows, bias, hard_gate=False):
     by_scene = defaultdict(list)
     improved = 0
+    unchanged_count = false_modify = false_darken = 0
     for scene, rgb, target, correction, logits in rows:
         calibrated_mask = torch.sigmoid(logits - bias)
+        if hard_gate:
+            calibrated_mask = calibrated_mask * (logits >= bias).to(calibrated_mask.dtype)
         prediction = torch.clamp(rgb + calibrated_mask * correction, 0, 1)
         mae = (prediction - target).abs().mean().item()
         by_scene[scene].append(mae)
         improved += mae < (rgb - target).abs().mean().item()
+        unchanged = (rgb - target).abs().amax(dim=1, keepdim=True) <= (5 / 255)
+        correction = prediction - rgb
+        unchanged_count += unchanged.sum().item()
+        false_modify += ((correction.abs().amax(dim=1, keepdim=True) > 2 / 255) & unchanged).sum().item()
+        false_darken += (((-correction).amax(dim=1, keepdim=True) > 5 / 255) & unchanged).sum().item()
     means = {str(scene): float(np.mean(values)) for scene, values in by_scene.items()}
     return {"mae": float(np.mean([value for values in by_scene.values() for value in values])),
-            "scene_mae": means, "improved_pairs": improved}
+            "scene_mae": means, "improved_pairs": improved,
+            "unchanged_modify_rate_gt_2_255": false_modify / unchanged_count,
+            "unchanged_darken_rate_gt_5_255": false_darken / unchanged_count}
 
 
 def run(checkpoint: Path, device_name: str, output: Path,
-        data_root: Path = Path("dataset/raw"), kind: str = "geometry_mask"):
+        data_root: Path = Path("dataset/raw"), kind: str = "geometry_mask",
+        max_false_darken_rate: float | None = None, hard_gate: bool = False):
+    if hard_gate and kind != "shadow_refine_mask":
+        raise ValueError("hard gate is supported only for shadow_refine_mask")
     device = select_device(device_name)
     model = build_model(kind).to(device)
     model.load_state_dict(torch.load(checkpoint, map_location=device, weights_only=True)["model"])
     validation = collect(model, ShadowPairs(data_root, "validation", include_geometry=True), device)
     test = collect(model, ShadowPairs(data_root, "test", include_geometry=True), device)
     candidates = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0]
-    validation_scores = {str(bias): score(validation, bias) for bias in candidates}
-    chosen = min(candidates, key=lambda bias: validation_scores[str(bias)]["mae"])
+    validation_scores = {str(bias): score(validation, bias, hard_gate) for bias in candidates}
+    eligible = candidates
+    if max_false_darken_rate is not None:
+        if not 0 <= max_false_darken_rate <= 1:
+            raise ValueError("max false-darkening rate must be in [0, 1]")
+        eligible = [bias for bias in candidates
+                    if validation_scores[str(bias)]["unchanged_darken_rate_gt_5_255"]
+                    <= max_false_darken_rate]
+        if not eligible:
+            raise ValueError("no validation mask bias meets the false-darkening limit")
+    chosen = min(eligible, key=lambda bias: validation_scores[str(bias)]["mae"])
     result = {"checkpoint": str(checkpoint), "data": str(data_root), "kind": kind,
               "selected_bias": chosen,
+              "hard_gate": hard_gate,
+              "selection": {"metric": "validation MAE",
+                            "max_unchanged_darken_rate_gt_5_255": max_false_darken_rate},
               "validation_scores": validation_scores,
-              "test_at_zero_bias": score(test, 0.0),
-              "test_at_selected_bias": score(test, chosen)}
+              "test_at_zero_bias": score(test, 0.0, hard_gate),
+              "test_at_selected_bias": score(test, chosen, hard_gate)}
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(result, indent=2) + "\n")
     print(json.dumps(result, indent=2))
@@ -72,5 +97,10 @@ if __name__ == "__main__":
     parser.add_argument("--output", type=Path, default=Path("artifacts/mask_calibration_32.json"))
     parser.add_argument("--data", type=Path, default=Path("dataset/raw"))
     parser.add_argument("--kind", choices=("geometry_mask", "shadow_refine_mask"), default="geometry_mask")
+    parser.add_argument("--max-false-darken-rate", type=float, default=None,
+                        help="Optional validation constraint for unchanged pixels darkened by >5/255")
+    parser.add_argument("--hard-gate", action="store_true",
+                        help="Set mask confidence below the bias to exactly zero at inference")
     args = parser.parse_args()
-    run(args.checkpoint, args.device, args.output, args.data, args.kind)
+    run(args.checkpoint, args.device, args.output, args.data, args.kind,
+        args.max_false_darken_rate, args.hard_gate)

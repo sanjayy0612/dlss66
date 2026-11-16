@@ -86,12 +86,14 @@ def temporal_mae(source_error, target_error, grid, visible):
     return (source_error - warped).abs()[:, visible].mean().item()
 
 
-def run(data_root: Path, checkpoint: Path, device_name: str, mask_bias: float):
+def run(data_root: Path, checkpoint: Path, device_name: str, mask_bias: float,
+        hard_mask: bool = False):
     device = select_device(device_name)
     dataset = ShadowPairs(data_root, "test", include_geometry=True)
     model = build_model("shadow_refine_mask").to(device).eval()
     model.load_state_dict(torch.load(checkpoint, map_location=device, weights_only=True)["model"])
     model.mask_bias = mask_bias
+    model.hard_mask = hard_mask
     frame = {}
     with torch.inference_mode():
         for row, (condition, reference) in zip(dataset.rows, dataset):
@@ -135,6 +137,7 @@ def run(data_root: Path, checkpoint: Path, device_name: str, mask_bias: float):
                     entry[f"{name}_{region}_temporal_error"] = float(np.mean(samples)) if samples else None
         per_scene[str(scene)] = entry
     result = {"data": str(data_root), "device": str(device), "mask_bias": mask_bias,
+              "hard_mask": hard_mask,
               "mean_cheap_temporal_error": float(np.mean([x for v in scores.values() for x in v["cheap"]])),
               "mean_model_temporal_error": float(np.mean([x for v in scores.values() for x in v["model"]])),
               "per_scene": per_scene,
@@ -151,5 +154,6 @@ if __name__ == "__main__":
     parser.add_argument("--checkpoint", type=Path, default=Path("artifacts/shadow_refine_mask_32.pt"))
     parser.add_argument("--device", choices=("auto", "mps", "cuda", "cpu"), default="auto")
     parser.add_argument("--mask-bias", type=float, default=1.5)
+    parser.add_argument("--hard-mask", action="store_true")
     args = parser.parse_args()
-    run(args.data, args.checkpoint, args.device, args.mask_bias)
+    run(args.data, args.checkpoint, args.device, args.mask_bias, args.hard_mask)

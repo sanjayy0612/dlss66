@@ -67,11 +67,12 @@ def score(root, scenes, alpha, mode="rgb"):
             "scenes": scene_results}
 
 
-def run(validation_root, test_root, checkpoint, device_name, mask_bias):
+def run(validation_root, test_root, checkpoint, device_name, mask_bias, hard_mask=False):
     device = select_device(device_name)
     model = build_model("shadow_refine_mask").to(device).eval()
     model.load_state_dict(torch.load(checkpoint, map_location=device, weights_only=True)["model"])
     model.mask_bias = mask_bias
+    model.hard_mask = hard_mask
     validation = prepare(validation_root, "validation", model, device)
     fresh_test = prepare(test_root, "test", model, device)
     candidates = [("rgb", 0.0)] + [(mode, alpha) for mode in ("rgb", "residual")
@@ -82,6 +83,7 @@ def run(validation_root, test_root, checkpoint, device_name, mask_bias):
     selected = min(candidates, key=lambda item: validation_scores[f"{item[0]}:{item[1]}"]["mae"] +
                    validation_scores[f"{item[0]}:{item[1]}"]["temporal_error"])
     result = {"device": str(device), "mask_bias": mask_bias,
+              "hard_mask": hard_mask,
               "selected_mode": selected[0], "selected_alpha": selected[1],
               "validation": validation_scores,
               "fresh_test_no_history": score(test_root, fresh_test, 0.0),
@@ -97,5 +99,7 @@ if __name__ == "__main__":
     parser.add_argument("--checkpoint", type=Path, default=Path("artifacts/shadow_refine_mask_32.pt"))
     parser.add_argument("--device", choices=("auto", "mps", "cuda", "cpu"), default="auto")
     parser.add_argument("--mask-bias", type=float, default=1.5)
+    parser.add_argument("--hard-mask", action="store_true")
     args = parser.parse_args()
-    run(args.validation_data, args.test_data, args.checkpoint, args.device, args.mask_bias)
+    run(args.validation_data, args.test_data, args.checkpoint, args.device,
+        args.mask_bias, args.hard_mask)

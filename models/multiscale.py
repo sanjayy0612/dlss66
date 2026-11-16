@@ -78,10 +78,13 @@ class ShadowRefinementRenderer(MaskedShadowRenderer):
         super().__init__()
         nn.init.zeros_(self.strength_head.bias)
         self.mask_bias = 0.0
+        self.hard_mask = False
 
     def forward_with_mask(self, condition: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         features = self.features(condition)
         logits = self.mask_head(features)
         mask = torch.sigmoid(logits - self.mask_bias)
+        if self.hard_mask:
+            mask = mask * (logits >= self.mask_bias).to(mask.dtype)
         correction = self.max_delta * mask * torch.tanh(self.strength_head(features))
         return torch.clamp(condition[:, :3] + correction, 0, 1), logits

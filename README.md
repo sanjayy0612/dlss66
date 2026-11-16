@@ -52,7 +52,7 @@ python3 -m evaluation.benchmark_refinement --device auto
 python3 -m evaluation.visualize_refinement --data dataset/shadow_resolution_fresh --scenes 32 33 34 35 --mask-bias 1.5 --device auto
 ```
 
-On the M2, the 80,152-parameter model reduced uncalibrated test MAE from 0.01136 to 0.01029 but initially worsened one scene. Validation-only mask calibration selected bias 1.5; on **four newly captured scenes**, it reduced MAE from 0.01031 to 0.00736 and improved 47/48 frames. On another four unseen scenes, it reduced MAE from 0.00987 to 0.00751. Reprojected history of the predicted correction lowered temporal error from 0.00752 to 0.00573, though the cheap renderer remained steadier at 0.00511. A second model trained with less changed-pixel weighting improved 89/96 frames on a new smooth-camera, moving-sphere sequence, but still had higher temporal error than cheap rendering. See [EXPERIMENT_LOG.md](docs/EXPERIMENT_LOG.md).
+On the M2, the 80,152-parameter model reduced uncalibrated test MAE from 0.01136 to 0.01029 but initially worsened one scene. A later model used `changed_weight=5`, `unchanged_weight=2`, and a hard confidence gate selected on validation. It reduced MAE from 0.00987 to 0.00692 on four unseen static scenes and from 0.01266 to 0.00847 on two moving-sphere scenes. False darkening remained 0.347% and 0.577%, respectively. Temporal correction lowered moving-sequence error from 0.00712 to 0.00652; cheap rendering was 0.00619. This is measurable improvement, but false shadows and worse temporal stability remain. See [EXPERIMENT_LOG.md](docs/EXPERIMENT_LOG.md).
 
 ## Live M2 feasibility check
 

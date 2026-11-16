@@ -33,8 +33,9 @@ def build_model(kind: str):
 
 
 def run(kind: str, epochs: int, device_name: str, root: Path, output: Path,
-        seed: int = 7, changed_weight: float = 4.0, mask_pos_weight: float = 2.0):
-    if changed_weight < 0 or mask_pos_weight <= 0:
+        seed: int = 7, changed_weight: float = 4.0, unchanged_weight: float = 1.0,
+        mask_pos_weight: float = 2.0):
+    if changed_weight < 0 or unchanged_weight <= 0 or mask_pos_weight <= 0:
         raise ValueError("loss weights must be valid")
     random.seed(seed)
     np.random.seed(seed)
@@ -63,7 +64,7 @@ def run(kind: str, epochs: int, device_name: str, root: Path, output: Path,
             else:
                 prediction = model(x)
             changed = ((x[:, :3] - y).abs().amax(dim=1, keepdim=True) > 5 / 255).float()
-            weights = 1 + changed_weight * changed
+            weights = changed * (1 + changed_weight) + (1 - changed) * unchanged_weight
             loss = (weights * (prediction - y).abs()).mean()
             if kind in {"geometry_mask", "shadow_refine_mask"}:
                 difference = x[:, :3] - y
@@ -87,6 +88,7 @@ def run(kind: str, epochs: int, device_name: str, root: Path, output: Path,
     model.load_state_dict(state["model"])
     result = {"kind": kind, "device": str(device), "epochs": epochs,
               "changed_weight": changed_weight,
+              "unchanged_weight": unchanged_weight,
               "mask_pos_weight": mask_pos_weight if kind in {"geometry_mask", "shadow_refine_mask"} else None,
               "parameters": sum(p.numel() for p in model.parameters()),
               "best_epoch": state["epoch"], "input": baseline,
@@ -105,9 +107,11 @@ if __name__ == "__main__":
     parser.add_argument("--data", type=Path, default=Path("dataset/raw"))
     parser.add_argument("--output", type=Path, default=Path("artifacts/shadow_cnn.pt"))
     parser.add_argument("--changed-weight", type=float, default=4.0)
+    parser.add_argument("--unchanged-weight", type=float, default=1.0)
     parser.add_argument("--mask-pos-weight", type=float, default=2.0)
     args = parser.parse_args()
-    if args.epochs < 1 or args.changed_weight < 0 or args.mask_pos_weight <= 0:
+    if args.epochs < 1 or args.changed_weight < 0 or args.unchanged_weight <= 0 or args.mask_pos_weight <= 0:
         parser.error("invalid epochs or loss weights")
     run(args.kind, args.epochs, args.device, args.data, args.output,
-        changed_weight=args.changed_weight, mask_pos_weight=args.mask_pos_weight)
+        changed_weight=args.changed_weight, unchanged_weight=args.unchanged_weight,
+        mask_pos_weight=args.mask_pos_weight)

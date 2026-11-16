@@ -245,3 +245,40 @@ python3 -m evaluation.temporal --data dataset/motion_test --checkpoint artifacts
 python3 -m evaluation.temporal_blend --device mps --mask-bias 1.0 --checkpoint artifacts/shadow_refine_mask_weight5_32.pt --test-data dataset/motion_test
 python3 -m unittest discover -s tests -q  # 13 tests passed
 ```
+
+### Preserve unchanged pixels with a validation constraint, 2026-11-16
+
+The previous comparison showed that `changed_weight=5, unchanged_weight=1` improved image quality but still introduced small dark corrections on unchanged pixels. [`training/train_pairs.py`](../training/train_pairs.py) now lets the two regions have explicit positive weights. `unchanged_weight=4` collapsed to near identity: validation MAE stayed about 0.01124 versus cheap 0.01123 after 20 epochs. A milder setting, `changed_weight=5, unchanged_weight=2`, learned a useful correction; its best validation checkpoint was epoch 20.
+
+[`training/paired.py`](../training/paired.py) now reports a direct false-darkening measure: the share of reference-unchanged pixels where the model darkens cheap RGB by more than 5/255. On validation scenes 24–27, the balanced model's MAE-optimal mask bias was 1.0, with a 0.644% false-darkening rate. We added an optional validation constraint to [`evaluation/calibrate_mask.py`](../evaluation/calibrate_mask.py). With a declared limit of 0.5%, it selects bias **2.0** (validation MAE 0.007288; validation false-darkening 0.454%). This is a validation choice, not proof of zero hallucination.
+
+The constraint transferred to new static scenes **36–39**: model MAE was **0.007012** versus cheap **0.009874**, all 48 frames improved, and false-darkening above 5/255 was **0.386%** of unchanged pixels. On moving scenes **40–41**, model MAE was **0.008614** versus cheap **0.012663**, all 96 frames improved; false-darkening was **0.636%**. These values are nonzero. The model's changed-pixel trade-off and small procedural object mean this does not establish general game behavior.
+
+The offline reprojection temporal error at bias 2.0 was **0.006984** versus cheap **0.006195** on the moving sequence. Correction history strength 0.75, selected on validation scenes, reduced it to **0.006479** while increasing image MAE from **0.008614 to 0.009041**. This is closer to cheap but remains worse. The moving sphere contributes under 0.6% of visibility-valid pixels, and the score includes much larger static surfaces.
+
+```sh
+python3 -m training.train_pairs --kind shadow_refine_mask --changed-weight 5 --unchanged-weight 4 --epochs 20 --data dataset/shadow_resolution --device mps --output artifacts/shadow_refine_mask_balanced_32.pt
+python3 -m training.train_pairs --kind shadow_refine_mask --changed-weight 5 --unchanged-weight 2 --epochs 20 --data dataset/shadow_resolution --device mps --output artifacts/shadow_refine_mask_balanced2_32.pt
+python3 -m evaluation.calibrate_mask --kind shadow_refine_mask --data dataset/shadow_resolution --checkpoint artifacts/shadow_refine_mask_balanced2_32.pt --output artifacts/shadow_refine_balanced2_calibration_constrained.json --device mps --max-false-darken-rate 0.005
+python3 -m evaluation.final_holdout --device mps --data dataset/temporal_test --kind shadow_refine_mask --mask-bias 2.0 --checkpoint artifacts/shadow_refine_mask_balanced2_32.pt --output artifacts/shadow_refine_balanced2_bias2_temporal_test.json
+python3 -m evaluation.final_holdout --device mps --data dataset/motion_test --kind shadow_refine_mask --mask-bias 2.0 --checkpoint artifacts/shadow_refine_mask_balanced2_32.pt --output artifacts/shadow_refine_balanced2_bias2_motion_test.json
+python3 -m evaluation.temporal --data dataset/motion_test --checkpoint artifacts/shadow_refine_mask_balanced2_32.pt --device mps --mask-bias 2.0
+python3 -m evaluation.temporal_blend --device mps --mask-bias 2.0 --checkpoint artifacts/shadow_refine_mask_balanced2_32.pt --test-data dataset/motion_test
+```
+
+### Hard confidence gate, selected on validation, 2026-11-16
+
+The `sigmoid(logit − bias)` mask still gives small nonzero corrections below its confidence threshold. [`ShadowRefinementRenderer`](../models/multiscale.py) now has an optional hard gate: pixels with logits below the bias receive exactly zero mask and therefore keep cheap RGB unchanged. This does not prevent false positives above the threshold. [`evaluation/calibrate_mask.py`](../evaluation/calibrate_mask.py) can calibrate the soft or hard gate with the same validation false-darkening limit.
+
+With `changed_weight=5`, `unchanged_weight=2`, and hard gating, the validation-selected bias was **1.0**. Validation false darkening was 0.407% at this bias. On fresh static scenes 36–39, MAE was **0.006923** versus cheap **0.009874**, all 48 frames improved, and false darkening above 5/255 was **0.347%** of unchanged pixels. On moving scenes 40–41, MAE was **0.008472** versus cheap **0.012663**, all 96 frames improved, and false darkening was **0.577%**. Thus the measured threshold transfers closely to static scenes, but misses its limit on the moving sequence. False modifications above 2/255 were 0.803% and 0.948% respectively.
+
+For this hard-gated model, offline temporal error was **0.007122** versus cheap **0.006195**. Validation-selected correction history at strength 0.75 reduced it to **0.006524**, with image MAE increasing from **0.008472 to 0.008874**. It remains less stable than cheap rendering. No history variant was measured with live Godot presentation; the earlier 55.17 ms serial result still defines the external path's practical limit.
+
+```sh
+python3 -m evaluation.calibrate_mask --kind shadow_refine_mask --data dataset/shadow_resolution --checkpoint artifacts/shadow_refine_mask_balanced2_32.pt --output artifacts/shadow_refine_balanced2_hard_calibration.json --device mps --max-false-darken-rate 0.005 --hard-gate
+python3 -m evaluation.final_holdout --device mps --data dataset/temporal_test --kind shadow_refine_mask --mask-bias 1.0 --hard-mask --checkpoint artifacts/shadow_refine_mask_balanced2_32.pt --output artifacts/shadow_refine_balanced2_hard_temporal_test.json
+python3 -m evaluation.final_holdout --device mps --data dataset/motion_test --kind shadow_refine_mask --mask-bias 1.0 --hard-mask --checkpoint artifacts/shadow_refine_mask_balanced2_32.pt --output artifacts/shadow_refine_balanced2_hard_motion_test.json
+python3 -m evaluation.temporal --data dataset/motion_test --checkpoint artifacts/shadow_refine_mask_balanced2_32.pt --device mps --mask-bias 1.0 --hard-mask
+python3 -m evaluation.temporal_blend --device mps --mask-bias 1.0 --hard-mask --checkpoint artifacts/shadow_refine_mask_balanced2_32.pt --test-data dataset/motion_test
+python3 -m unittest discover -s tests -q  # 14 tests passed
+```

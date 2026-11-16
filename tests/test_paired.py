@@ -69,6 +69,20 @@ class PairedTests(unittest.TestCase):
         calibrated = model(condition)
         self.assertTrue(torch.all(calibrated - condition[:, :3] < original - condition[:, :3]))
 
+    def test_hard_mask_keeps_below_threshold_pixels_unchanged(self):
+        model = ShadowRefinementRenderer()
+        with torch.no_grad():
+            model.mask_head.weight.zero_()
+            model.mask_head.bias.zero_()
+            model.strength_head.weight.zero_()
+            model.strength_head.bias.fill_(-1.0)
+        condition = torch.full((1, 11, 16, 24), 0.5)
+        model.mask_bias = 1.0
+        model.hard_mask = True
+        self.assertTrue(torch.equal(model(condition), condition[:, :3]))
+        model.mask_bias = -1.0
+        self.assertTrue(torch.all(model(condition) < condition[:, :3]))
+
     def test_shadow_mask_output_only_darkens(self):
         model = MaskedShadowRenderer()
         condition = torch.rand(2, 11, 16, 24)
