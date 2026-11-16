@@ -64,7 +64,7 @@ def run(checkpoint: Path, device_name: str, output: Path,
     model.load_state_dict(torch.load(checkpoint, map_location=device, weights_only=True)["model"])
     validation = collect(model, ShadowPairs(data_root, "validation", include_geometry=True), device)
     test = collect(model, ShadowPairs(data_root, "test", include_geometry=True), device)
-    candidates = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0]
+    candidates = [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 5.0, 6.0, 8.0, 10.0]
     validation_scores = {str(bias): score(validation, bias, hard_gate) for bias in candidates}
     eligible = candidates
     if max_false_darken_rate is not None:

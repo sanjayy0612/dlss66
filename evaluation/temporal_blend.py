@@ -32,6 +32,7 @@ def score(root, scenes, alpha, mode="rgb"):
         raise ValueError(mode)
     frame_mae = []
     temporal_errors = []
+    unchanged_pixels = false_modify = false_darken = 0
     scene_results = {}
     for scene, frames in scenes.items():
         outputs = []
@@ -53,6 +54,11 @@ def score(root, scenes, alpha, mode="rgb"):
             mae = (outputs[index] - reference).abs().mean().item()
             frame_mae.append(mae)
             scene_mae.append(mae)
+            unchanged = (_cheap - reference).abs().amax(dim=0) <= (5 / 255)
+            correction = outputs[index] - _cheap
+            unchanged_pixels += unchanged.sum().item()
+            false_modify += ((correction.abs().amax(dim=0) > 2 / 255) & unchanged).sum().item()
+            false_darken += (((-correction).amax(dim=0) > 5 / 255) & unchanged).sum().item()
             if index + 1 < len(frames):
                 next_row, _, next_reference, _ = frames[index + 1]
                 grid, visible = reprojection(root, row, next_row)
@@ -64,6 +70,8 @@ def score(root, scenes, alpha, mode="rgb"):
         scene_results[str(scene)] = {"mae": float(np.mean(scene_mae)),
                                      "temporal_error": float(np.mean(scene_temporal))}
     return {"mae": float(np.mean(frame_mae)), "temporal_error": float(np.mean(temporal_errors)),
+            "unchanged_modify_rate_gt_2_255": false_modify / unchanged_pixels,
+            "unchanged_darken_rate_gt_5_255": false_darken / unchanged_pixels,
             "scenes": scene_results}
 
 

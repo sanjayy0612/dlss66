@@ -282,3 +282,19 @@ python3 -m evaluation.temporal --data dataset/motion_test --checkpoint artifacts
 python3 -m evaluation.temporal_blend --device mps --mask-bias 1.0 --hard-mask --checkpoint artifacts/shadow_refine_mask_balanced2_32.pt --test-data dataset/motion_test
 python3 -m unittest discover -s tests -q  # 14 tests passed
 ```
+
+### Stricter hard-gate sweep, 2026-11-16
+
+We expanded the validation mask-bias sweep from 0–3 to 0–10. With hard gating and a validation constraint of at most **0.1%** unchanged pixels darkened by more than 5/255, the lowest-MAE eligible bias was **4.0**. Validation MAE was 0.008802 versus cheap 0.011232, with a 0.090% false-darkening rate. Biases 5 and 6 reduced the rate further on validation (0.046% and 0.009%) but lost more image quality; bias 8 produced no corrections and no quality improvement.
+
+The selected bias transferred to fresh static scenes 36–39: MAE **0.008391** versus cheap **0.009874**, 48/48 frames improved, and false darkening was **0.033%**. On moving scenes 40–41, MAE was **0.010432** versus cheap **0.012663**, 96/96 frames improved, and false darkening was **0.051%**. These figures are small but not zero. The hard gate ensures exact identity below its threshold; pixels above it can still be false positives.
+
+At this threshold, no-history temporal error on the moving sequence was **0.006738** versus cheap **0.006195**. Correction-history strength 0.75, selected on validation by `MAE + temporal error`, lowered temporal error to **0.006340** and increased image MAE to **0.010657**. It also increased false darkening from **0.051% to 0.247%**, still below the declared 0.5% validation limit used for the blend experiment but above the stricter 0.1% gate target. History helps stability, yet does not beat cheap rendering and weakens shadow preservation. This is a clear trade-off rather than a completed temporal solution.
+
+```sh
+python3 -m evaluation.calibrate_mask --kind shadow_refine_mask --data dataset/shadow_resolution --checkpoint artifacts/shadow_refine_mask_balanced2_32.pt --output artifacts/shadow_refine_balanced2_hard_calibration_001.json --device mps --max-false-darken-rate 0.001 --hard-gate
+python3 -m evaluation.final_holdout --device mps --data dataset/temporal_test --kind shadow_refine_mask --mask-bias 4.0 --hard-mask --checkpoint artifacts/shadow_refine_mask_balanced2_32.pt --output artifacts/shadow_refine_balanced2_hard4_temporal_test.json
+python3 -m evaluation.final_holdout --device mps --data dataset/motion_test --kind shadow_refine_mask --mask-bias 4.0 --hard-mask --checkpoint artifacts/shadow_refine_mask_balanced2_32.pt --output artifacts/shadow_refine_balanced2_hard4_motion_test.json
+python3 -m evaluation.temporal --data dataset/motion_test --checkpoint artifacts/shadow_refine_mask_balanced2_32.pt --device mps --mask-bias 4.0 --hard-mask
+python3 -m evaluation.temporal_blend --device mps --mask-bias 4.0 --hard-mask --checkpoint artifacts/shadow_refine_mask_balanced2_32.pt --test-data dataset/motion_test
+```
