@@ -272,7 +272,7 @@ The `sigmoid(logit − bias)` mask still gives small nonzero corrections below i
 
 With `changed_weight=5`, `unchanged_weight=2`, and hard gating, the validation-selected bias was **1.0**. Validation false darkening was 0.407% at this bias. On fresh static scenes 36–39, MAE was **0.006923** versus cheap **0.009874**, all 48 frames improved, and false darkening above 5/255 was **0.347%** of unchanged pixels. On moving scenes 40–41, MAE was **0.008472** versus cheap **0.012663**, all 96 frames improved, and false darkening was **0.577%**. Thus the measured threshold transfers closely to static scenes, but misses its limit on the moving sequence. False modifications above 2/255 were 0.803% and 0.948% respectively.
 
-For this hard-gated model, offline temporal error was **0.007122** versus cheap **0.006195**. Validation-selected correction history at strength 0.75 reduced it to **0.006524**, with image MAE increasing from **0.008472 to 0.008874**. It remains less stable than cheap rendering. No history variant was measured with live Godot presentation; the earlier 55.17 ms serial result still defines the external path's practical limit.
+For this hard-gated model, offline temporal error was **0.007122** versus cheap **0.006195**. Validation-selected correction history at strength 0.75 reduced it to **0.006524**, with image MAE increasing from **0.008472 to 0.008874**. It remains less stable than cheap rendering. No history variant was measured with live Godot presentation. At this point, the earlier 55.17 ms serial result defined the external path; a later 48-frame geometry-conditioned run is recorded below.
 
 ```sh
 python3 -m evaluation.calibrate_mask --kind shadow_refine_mask --data dataset/shadow_resolution --checkpoint artifacts/shadow_refine_mask_balanced2_32.pt --output artifacts/shadow_refine_balanced2_hard_calibration.json --device mps --max-false-darken-rate 0.005 --hard-gate
@@ -317,10 +317,36 @@ Steady timing excludes the first 12 startup frames. Latencies are serial and inc
 
 The server-side model call plus MPS synchronization had a 6.96 ms median and 10.05 ms p95. These measurements include CPU-to-MPS input transfer before the model and MPS-to-CPU output transfer afterward. The bridge uses a CPU socket path, so it does not measure zero-copy inference. The steady median corresponds to about 36 serial frames per second, while the p95 corresponds to about 28; it does not meet a stable 60 FPS budget.
 
-The primary model also uses depth, normals and light direction. A 48-frame attempt with that 11-channel model failed before inference: Godot timed out while connecting to the local server, and the server exited without accepting a client. No latency or quality claim can be made for that attempt. The prior geometry-conditioned run measured 55.17 ms median over 17 frames, but needs to be repeated with the current alignment and model settings. This leaves real-time feasibility for the primary model unresolved.
+The primary model also uses depth, normals and light direction. The first attempt at a 48-frame 11-channel run failed before inference because Godot timed out while connecting to the local server. A later one-frame probe and full 48-frame rerun completed successfully; the result is in the next section. The timeout was intermittent and its cause remains unknown.
 
 ```sh
 python3 -m evaluation.serve_live --checkpoint artifacts/shadow_refine_rgb_balanced2_32.pt --kind shadow_refine_rgb --device mps --frames 48 --warmup 10 --mask-bias 4 --hard-mask
 DLSS66_VARIANT=cheap DLSS66_TASK=shadow_resolution DLSS66_LIVE_RGB_ONLY=1 DLSS66_LIVE_FRAMES=48 DLSS66_OUTPUT=dataset/shadow_resolution tools/Godot.app/Contents/MacOS/Godot --path . -- --live
 PYTHONPATH=. python3 -m unittest discover -s tests -q  # 16 tests passed; CPU training smoke test also passed
+```
+
+### Full geometry-conditioned live path, 2026-11-16
+
+The 11-channel model was then run through the same 48-frame scene-28 camera loop with its RGB, RGBA32F depth/normal export, view-space light direction and hard-gated bias-4 checkpoint. After two earlier local-connect timeouts, a one-frame probe connected and completed; the subsequent 48-frame run also completed. The earlier timeout was intermittent and its root cause is not known. The final run contained 48 server measurements and 48 Godot measurements. All 13 sampled received RGB images (including frames 23, 24, 35–40 and 47) exactly matched the expected cheap-render PNGs, so no late camera-pose drift was present.
+
+On these repeated integration poses, mean RGB MAE was **0.005956** for cheap rendering and **0.005544** for the model; the model was lower on **32/48 frames**. This checks that the complete geometry-conditioned interface produces plausible outputs. It does not add new generalization evidence beyond the held-out-scene offline tests because it repeats scene 28.
+
+The latest run added stage timers to [`dataset.gd`](../dataset.gd). The following are p50/p95 over frames 2–47 to exclude cold startup:
+
+| Host-observed stage | p50 | p95 |
+|---|---:|---:|
+| Camera update and two render/process boundaries | 66.60 ms | 67.06 ms |
+| Wait for compositor geometry export callback | 33.41 ms | 33.73 ms |
+| RGB texture readback | 18.15 ms | 19.82 ms |
+| Godot request/response, MPS inference and return | 15.29 ms | 15.82 ms |
+| Output upload | 0.06 ms | 0.11 ms |
+| Full serial pipeline, including output presentation | **166.58 ms** | **167.22 ms** |
+
+Server-side input preparation had 1.67 ms median / 2.91 ms p95. Model transfer to MPS, forward pass and synchronization took 6.81 ms median / 8.08 ms p95. These values show that the CNN call is not the main bottleneck. Pose synchronization, waiting for the geometry callback, RGB readback and output presentation dominate. They are wall-clock stage durations; they do not isolate the GPU time of the export shader. The external serial path sustains only about 6 FPS, so it is not real-time. A direct GPU-native path is needed before making a positive real-time claim.
+
+The successful one-frame probe and 48-frame rerun both used:
+
+```sh
+python3 -m evaluation.serve_live --checkpoint artifacts/shadow_refine_mask_balanced2_32.pt --kind shadow_refine_mask --device mps --port 8766 --frames 48 --warmup 10 --mask-bias 4 --hard-mask --accept-timeout 300
+DLSS66_VARIANT=cheap DLSS66_TASK=shadow_resolution DLSS66_LIVE_FRAMES=48 DLSS66_OUTPUT=dataset/shadow_resolution tools/Godot.app/Contents/MacOS/Godot --path . -- --live
 ```

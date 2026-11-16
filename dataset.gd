@@ -175,8 +175,9 @@ func run_live() -> bool:
 	var output_texture: ImageTexture
 	var peer := StreamPeerTCP.new()
 	var port := int(OS.get_environment("DLSS66_LIVE_PORT")) if OS.has_environment("DLSS66_LIVE_PORT") else 8766
-	if peer.connect_to_host("127.0.0.1", port) != OK:
-		push_error("Cannot connect to inference server")
+	var connect_result := peer.connect_to_host("127.0.0.1", port)
+	if connect_result != OK:
+		push_error("Cannot connect to inference server: port=%d result=%d status=%d" % [port, connect_result, peer.get_status()])
 		return false
 	for wait_index in range(120):
 		peer.poll()
@@ -184,7 +185,7 @@ func run_live() -> bool:
 			break
 		await get_tree().process_frame
 	if peer.get_status() != StreamPeerTCP.STATUS_CONNECTED:
-		push_error("Inference connection timed out")
+		push_error("Inference connection timed out: port=%d status=%d" % [port, peer.get_status()])
 		return false
 	peer.set_no_delay(true)
 	var frame_count := int(OS.get_environment("DLSS66_LIVE_FRAMES")) if OS.has_environment("DLSS66_LIVE_FRAMES") else 24
@@ -199,8 +200,11 @@ func run_live() -> bool:
 		for _warmup in range(2):
 			RenderingServer.force_draw()
 			await get_tree().process_frame
+		var pose_sync_us := Time.get_ticks_usec()
 		var geometry_ready := rgb_only
+		var geometry_wait_ms := 0.0
 		if not rgb_only:
+			var geometry_start_us := Time.get_ticks_usec()
 			RenderingServer.call_on_render_thread(probe.arm.bind(""))
 			for _wait in range(90):
 				RenderingServer.force_draw()
@@ -211,6 +215,7 @@ func run_live() -> bool:
 			if not geometry_ready:
 				push_error("Live geometry readback timed out")
 				return false
+			geometry_wait_ms = float(Time.get_ticks_usec() - geometry_start_us) / 1000.0
 		var export_us := Time.get_ticks_usec()
 		if not rgb_only:
 			RenderingServer.force_draw()
@@ -262,12 +267,16 @@ func run_live() -> bool:
 		var shown_us := Time.get_ticks_usec()
 		measurements.append({"id": frame_id,
 			"export_ms": float(export_us - frame_start) / 1000.0,
+			"pose_sync_ms": float(pose_sync_us - frame_start) / 1000.0,
+			"geometry_wait_ms": geometry_wait_ms,
 			"rgb_ms": float(rgb_us - export_us) / 1000.0,
 			"ipc_infer_ms": float(inference_us - rgb_us) / 1000.0,
 			"upload_ms": float(upload_us - inference_us) / 1000.0,
 			"pipeline_ms": float(shown_us - frame_start) / 1000.0})
 		print("LIVE_FRAME id=", frame_id,
 			" export_ms=", float(export_us - frame_start) / 1000.0,
+			" pose_sync_ms=", float(pose_sync_us - frame_start) / 1000.0,
+			" geometry_wait_ms=", geometry_wait_ms,
 			" rgb_ms=", float(rgb_us - export_us) / 1000.0,
 			" ipc_infer_ms=", float(inference_us - rgb_us) / 1000.0,
 			" upload_ms=", float(upload_us - inference_us) / 1000.0,
