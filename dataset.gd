@@ -160,10 +160,12 @@ func run_live() -> bool:
 	remove_child(camera)
 	source_viewport.add_child(camera)
 	make_layout(28)
-	var compositor := Compositor.new()
-	probe = preload("res://dataset_probe.gd").new()
-	compositor.compositor_effects = [probe]
-	camera.compositor = compositor
+	var rgb_only := OS.get_environment("DLSS66_LIVE_RGB_ONLY") == "1"
+	if not rgb_only:
+		var compositor := Compositor.new()
+		probe = preload("res://dataset_probe.gd").new()
+		compositor.compositor_effects = [probe]
+		camera.compositor = compositor
 	camera.current = true
 	var layer := CanvasLayer.new()
 	add_child(layer)
@@ -192,36 +194,44 @@ func run_live() -> bool:
 		var angle := 0.2 + TAU * float(frame_id % FRAMES) / float(FRAMES)
 		camera.position = Vector3(cos(angle) * 3.1, 2.7, sin(angle) * 3.1)
 		camera.look_at(Vector3(0, 0.65, 0))
+		# A SubViewport can return the prior camera pose after sustained capture.
+		# Let two draw/process boundaries retire before reading its texture.
 		for _warmup in range(2):
 			RenderingServer.force_draw()
 			await get_tree().process_frame
-		RenderingServer.call_on_render_thread(probe.arm.bind(""))
-		var geometry_ready := false
-		for _wait in range(90):
-			RenderingServer.force_draw()
-			await get_tree().process_frame
-			if probe.saved:
-				geometry_ready = true
-				break
-		if not geometry_ready:
-			push_error("Live geometry readback timed out")
-			return false
+		var geometry_ready := rgb_only
+		if not rgb_only:
+			RenderingServer.call_on_render_thread(probe.arm.bind(""))
+			for _wait in range(90):
+				RenderingServer.force_draw()
+				await get_tree().process_frame
+				if probe.saved:
+					geometry_ready = true
+					break
+			if not geometry_ready:
+				push_error("Live geometry readback timed out")
+				return false
 		var export_us := Time.get_ticks_usec()
-		RenderingServer.force_draw()
+		if not rgb_only:
+			RenderingServer.force_draw()
 		var rgb_image := source_viewport.get_texture().get_image()
 		rgb_image.convert(Image.FORMAT_RGB8)
 		var rgb_bytes := rgb_image.get_data()
-		if rgb_bytes.size() != SIZE.x * SIZE.y * 3 or probe.latest_bytes.size() != SIZE.x * SIZE.y * 16:
+		if rgb_bytes.size() != SIZE.x * SIZE.y * 3 or (not rgb_only and probe.latest_bytes.size() != SIZE.x * SIZE.y * 16):
 			push_error("Live frame buffer has wrong size")
 			return false
 		var rgb_us := Time.get_ticks_usec()
-		var light_view := camera.global_transform.basis.inverse() * (-sun.global_transform.basis.z)
-		var light := PackedFloat32Array([light_view.x, light_view.y, light_view.z]).to_byte_array()
-		if peer.put_data(rgb_bytes) != OK or peer.put_data(probe.latest_bytes) != OK or peer.put_data(light) != OK:
+		if peer.put_data(rgb_bytes) != OK:
 			push_error("Inference request failed")
 			return false
+		if not rgb_only:
+			var light_view := camera.global_transform.basis.inverse() * (-sun.global_transform.basis.z)
+			var light := PackedFloat32Array([light_view.x, light_view.y, light_view.z]).to_byte_array()
+			if peer.put_data(probe.latest_bytes) != OK or peer.put_data(light) != OK:
+				push_error("Inference request failed")
+				return false
 		var response := PackedByteArray()
-		for _receive in range(120):
+		for _receive in range(2000):
 			peer.poll()
 			var available := peer.get_available_bytes()
 			if available > 0:
@@ -232,7 +242,10 @@ func run_live() -> bool:
 				response.append_array(chunk[1])
 			if response.size() == SIZE.x * SIZE.y * 3:
 				break
-			await get_tree().process_frame
+			if rgb_only:
+				OS.delay_usec(500)
+			else:
+				await get_tree().process_frame
 		if response.size() != SIZE.x * SIZE.y * 3:
 			push_error("Inference response timed out")
 			return false
@@ -267,7 +280,8 @@ func run_live() -> bool:
 	display_image.save_png("res://artifacts/live_display.png")
 	peer.disconnect_from_host()
 	camera.compositor = null
-	RenderingServer.call_on_render_thread(probe.cleanup)
+	if probe != null:
+		RenderingServer.call_on_render_thread(probe.cleanup)
 	await get_tree().process_frame
 	return true
 

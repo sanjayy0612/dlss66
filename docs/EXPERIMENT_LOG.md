@@ -298,3 +298,29 @@ python3 -m evaluation.final_holdout --device mps --data dataset/motion_test --ki
 python3 -m evaluation.temporal --data dataset/motion_test --checkpoint artifacts/shadow_refine_mask_balanced2_32.pt --device mps --mask-bias 4.0 --hard-mask
 python3 -m evaluation.temporal_blend --device mps --mask-bias 4.0 --hard-mask --checkpoint artifacts/shadow_refine_mask_balanced2_32.pt --test-data dataset/motion_test
 ```
+
+### RGB-only live bridge synchronization and M2 timing, 2026-11-16
+
+The previous RGB-only live loop could begin returning the prior camera pose after sustained capture. The input RGB then stopped matching the paired scene frames, which invalidated its late-frame throughput measurements. [`dataset.gd`](../dataset.gd) now waits for two draw/process boundaries after each camera update before reading the `SubViewport` texture. [`evaluation/serve_live.py`](../evaluation/serve_live.py) saves selected received RGB frames after the timed run for alignment inspection.
+
+The corrected run used Godot **4.7.2**, the Apple M2/Metal renderer, a 256×144 viewport, scene 28 and its 12-pose camera loop repeated four times. The model was `shadow_refine_rgb_balanced2_32.pt`, with mask bias 4 and a hard gate, running through PyTorch MPS. All 13 saved sample inputs (including frames 23, 24, 35–40, and 47) exactly matched their expected cheap-render PNGs byte-for-byte. Across all 48 frames, cheap-input MAE against the paired reference averaged **0.005956**; model MAE averaged **0.005857**, with the model lower on **32/48 frames**. This is a small gain on one held-out procedural layout; it is not broad visual validation.
+
+Steady timing excludes the first 12 startup frames. Latencies are serial and include the two Godot render boundaries needed to keep camera and RGB aligned:
+
+| Stage (36 steady frames) | p50 | p95 |
+|---|---:|---:|
+| Camera update and render boundaries | 16.88 ms | 20.96 ms |
+| RGB readback | 1.25 ms | 1.89 ms |
+| IPC, MPS inference and response | 8.52 ms | 10.99 ms |
+| Output texture upload | 0.06 ms | 0.09 ms |
+| Full displayed-frame pipeline | **27.70 ms** | **35.50 ms** |
+
+The server-side model call plus MPS synchronization had a 6.96 ms median and 10.05 ms p95. These measurements include CPU-to-MPS input transfer before the model and MPS-to-CPU output transfer afterward. The bridge uses a CPU socket path, so it does not measure zero-copy inference. The steady median corresponds to about 36 serial frames per second, while the p95 corresponds to about 28; it does not meet a stable 60 FPS budget.
+
+The primary model also uses depth, normals and light direction. A 48-frame attempt with that 11-channel model failed before inference: Godot timed out while connecting to the local server, and the server exited without accepting a client. No latency or quality claim can be made for that attempt. The prior geometry-conditioned run measured 55.17 ms median over 17 frames, but needs to be repeated with the current alignment and model settings. This leaves real-time feasibility for the primary model unresolved.
+
+```sh
+python3 -m evaluation.serve_live --checkpoint artifacts/shadow_refine_rgb_balanced2_32.pt --kind shadow_refine_rgb --device mps --frames 48 --warmup 10 --mask-bias 4 --hard-mask
+DLSS66_VARIANT=cheap DLSS66_TASK=shadow_resolution DLSS66_LIVE_RGB_ONLY=1 DLSS66_LIVE_FRAMES=48 DLSS66_OUTPUT=dataset/shadow_resolution tools/Godot.app/Contents/MacOS/Godot --path . -- --live
+PYTHONPATH=. python3 -m unittest discover -s tests -q  # 16 tests passed; CPU training smoke test also passed
+```

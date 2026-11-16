@@ -49,8 +49,8 @@ class MultiScaleRenderer(nn.Module):
 class MaskedShadowRenderer(MultiScaleRenderer):
     """Predict shadow location and darkness separately; output can only darken RGB."""
 
-    def __init__(self):
-        super().__init__(max_delta=0.6, condition_channels=11)
+    def __init__(self, condition_channels: int = 11):
+        super().__init__(max_delta=0.6, condition_channels=condition_channels)
         self.tail = nn.Identity()
         self.mask_head = nn.Conv2d(12, 1, 3, padding=1)
         self.strength_head = nn.Conv2d(12, 3, 3, padding=1)
@@ -74,8 +74,8 @@ class MaskedShadowRenderer(MultiScaleRenderer):
 class ShadowRefinementRenderer(MaskedShadowRenderer):
     """Gated signed RGB correction for an existing low-resolution shadow cue."""
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self, condition_channels: int = 11):
+        super().__init__(condition_channels=condition_channels)
         nn.init.zeros_(self.strength_head.bias)
         self.mask_bias = 0.0
         self.hard_mask = False

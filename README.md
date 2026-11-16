@@ -56,14 +56,14 @@ On the M2, the 80,152-parameter model reduced uncalibrated test MAE from 0.01136
 
 ## Live M2 feasibility check
 
-The small Godot/PyTorch bridge sends captured RGB, depth, normals, and light direction to a local MPS service and displays its returned RGB. Run these in separate terminals after training the checkpoint above:
+The Godot/PyTorch bridge displays model output in a separate overlay. The latest aligned 48-frame run used **RGB-only conditioning**. The server uses the RGB checkpoint and calibrated hard gate:
 
 ```sh
-python3 -m evaluation.serve_live --device mps --frames 24 --warmup 10
-DLSS66_VARIANT=cheap DLSS66_TASK=shadow_resolution DLSS66_LIVE_FRAMES=24 tools/Godot.app/Contents/MacOS/Godot --path . -- --live
+python3 -m evaluation.serve_live --checkpoint artifacts/shadow_refine_rgb_balanced2_32.pt --kind shadow_refine_rgb --device mps --frames 48 --warmup 10 --mask-bias 4 --hard-mask
+DLSS66_VARIANT=cheap DLSS66_TASK=shadow_resolution DLSS66_LIVE_RGB_ONLY=1 DLSS66_LIVE_FRAMES=48 DLSS66_OUTPUT=dataset/shadow_resolution tools/Godot.app/Contents/MacOS/Godot --path . -- --live
 ```
 
-On the tested scene, steady serial processing took **55.17 ms median / 69.69 ms p95** over 17 frames, including geometry export, RGB readback, inference round trip, and output upload. A Metal trace found that raising the atlas from 512 to 4096 cost only about 0.2 ms of GPU work on this tiny scene. The live prototype is therefore a useful correctness probe, **not a performance win or a 30/60 FPS solution**. Current image-quality and timing limits are recorded in [EXPERIMENT_LOG.md](docs/EXPERIMENT_LOG.md).
+After startup, serial processing took **27.70 ms median / 35.50 ms p95** at 256×144. This includes two render boundaries per camera pose, CPU RGB readback, local transfer, MPS inference, and output upload. It is evidence for a responsive RGB-only prototype at roughly 30–36 FPS in this small scene. It does **not** establish real-time performance for the geometry-conditioned model: a later 48-frame geometry run failed before inference because the local client connection timed out. Earlier geometry-path timing was 55.17 ms median over 17 frames. See [EXPERIMENT_LOG.md](docs/EXPERIMENT_LOG.md) for exact measurements and limitations.
 
 ## Shadow-model experiments
 

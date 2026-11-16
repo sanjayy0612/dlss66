@@ -3,10 +3,17 @@ import unittest
 
 import numpy as np
 
-from evaluation.serve_live import GEOMETRY_BYTES, HEIGHT, RGB_BYTES, WIDTH, condition_tensor
+from evaluation.serve_live import GEOMETRY_BYTES, HEIGHT, RGB_BYTES, WIDTH, condition_tensor, rgb_tensor
 
 
 class LiveProtocolTests(unittest.TestCase):
+    def test_rgb_only_tensor_layout_and_range(self):
+        rgb = bytes([128]) * RGB_BYTES
+        x = rgb_tensor(rgb)
+        self.assertEqual(tuple(x.shape), (1, 3, HEIGHT, WIDTH))
+        self.assertTrue(x.is_contiguous())
+        self.assertAlmostEqual(float(x[0, 0, 0, 0]), 128 / 255)
+
     def test_condition_tensor_layout_and_channels(self):
         rgb = bytes([128]) * RGB_BYTES
         geometry = np.zeros((HEIGHT, WIDTH, 4), dtype="<f4")

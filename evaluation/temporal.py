@@ -87,17 +87,18 @@ def temporal_mae(source_error, target_error, grid, visible):
 
 
 def run(data_root: Path, checkpoint: Path, device_name: str, mask_bias: float,
-        hard_mask: bool = False):
+        hard_mask: bool = False, kind: str = "shadow_refine_mask"):
     device = select_device(device_name)
     dataset = ShadowPairs(data_root, "test", include_geometry=True)
-    model = build_model("shadow_refine_mask").to(device).eval()
+    model = build_model(kind).to(device).eval()
     model.load_state_dict(torch.load(checkpoint, map_location=device, weights_only=True)["model"])
     model.mask_bias = mask_bias
     model.hard_mask = hard_mask
     frame = {}
     with torch.inference_mode():
         for row, (condition, reference) in zip(dataset.rows, dataset):
-            predicted = model(condition[None].to(device))[0].cpu()
+            model_condition = condition[:3] if kind == "shadow_refine_rgb" else condition
+            predicted = model(model_condition[None].to(device))[0].cpu()
             frame[(row["scene_id"], row["frame_id"])] = (row, condition[:3] - reference,
                                                             predicted - reference)
     scores = defaultdict(lambda: {"cheap": [], "model": [], "valid_fraction": [],
@@ -137,7 +138,7 @@ def run(data_root: Path, checkpoint: Path, device_name: str, mask_bias: float,
                     entry[f"{name}_{region}_temporal_error"] = float(np.mean(samples)) if samples else None
         per_scene[str(scene)] = entry
     result = {"data": str(data_root), "device": str(device), "mask_bias": mask_bias,
-              "hard_mask": hard_mask,
+              "hard_mask": hard_mask, "kind": kind,
               "mean_cheap_temporal_error": float(np.mean([x for v in scores.values() for x in v["cheap"]])),
               "mean_model_temporal_error": float(np.mean([x for v in scores.values() for x in v["model"]])),
               "per_scene": per_scene,
@@ -155,5 +156,7 @@ if __name__ == "__main__":
     parser.add_argument("--device", choices=("auto", "mps", "cuda", "cpu"), default="auto")
     parser.add_argument("--mask-bias", type=float, default=1.5)
     parser.add_argument("--hard-mask", action="store_true")
+    parser.add_argument("--kind", choices=("shadow_refine_mask", "shadow_refine_rgb"),
+                        default="shadow_refine_mask")
     args = parser.parse_args()
-    run(args.data, args.checkpoint, args.device, args.mask_bias, args.hard_mask)
+    run(args.data, args.checkpoint, args.device, args.mask_bias, args.hard_mask, args.kind)

@@ -57,13 +57,15 @@ def score(rows, bias, hard_gate=False):
 def run(checkpoint: Path, device_name: str, output: Path,
         data_root: Path = Path("dataset/raw"), kind: str = "geometry_mask",
         max_false_darken_rate: float | None = None, hard_gate: bool = False):
-    if hard_gate and kind != "shadow_refine_mask":
-        raise ValueError("hard gate is supported only for shadow_refine_mask")
+    masked_kinds = {"shadow_refine_mask", "shadow_refine_rgb"}
+    if hard_gate and kind not in masked_kinds:
+        raise ValueError("hard gate is supported only for masked refinement models")
     device = select_device(device_name)
     model = build_model(kind).to(device)
     model.load_state_dict(torch.load(checkpoint, map_location=device, weights_only=True)["model"])
-    validation = collect(model, ShadowPairs(data_root, "validation", include_geometry=True), device)
-    test = collect(model, ShadowPairs(data_root, "test", include_geometry=True), device)
+    use_geometry = kind != "shadow_refine_rgb"
+    validation = collect(model, ShadowPairs(data_root, "validation", include_geometry=use_geometry), device)
+    test = collect(model, ShadowPairs(data_root, "test", include_geometry=use_geometry), device)
     candidates = [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 5.0, 6.0, 8.0, 10.0]
     validation_scores = {str(bias): score(validation, bias, hard_gate) for bias in candidates}
     eligible = candidates
@@ -96,7 +98,7 @@ if __name__ == "__main__":
     parser.add_argument("--device", choices=("auto", "mps", "cuda", "cpu"), default="auto")
     parser.add_argument("--output", type=Path, default=Path("artifacts/mask_calibration_32.json"))
     parser.add_argument("--data", type=Path, default=Path("dataset/raw"))
-    parser.add_argument("--kind", choices=("geometry_mask", "shadow_refine_mask"), default="geometry_mask")
+    parser.add_argument("--kind", choices=("geometry_mask", "shadow_refine_mask", "shadow_refine_rgb"), default="geometry_mask")
     parser.add_argument("--max-false-darken-rate", type=float, default=None,
                         help="Optional validation constraint for unchanged pixels darkened by >5/255")
     parser.add_argument("--hard-gate", action="store_true",

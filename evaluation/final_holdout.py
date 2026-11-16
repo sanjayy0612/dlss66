@@ -19,11 +19,11 @@ def run(checkpoint: Path, output: Path, device_name: str, data_root: Path = Path
     data = ShadowPairs(data_root, "test", include_geometry=kind in {"geometry", "geometry_mask", "shadow_refine_mask"})
     model = build_model(kind).to(device).eval()
     model.load_state_dict(torch.load(checkpoint, map_location=device, weights_only=True)["model"])
-    if kind == "shadow_refine_mask":
+    if kind in {"shadow_refine_mask", "shadow_refine_rgb"}:
         model.mask_bias = mask_bias
         model.hard_mask = hard_mask
     elif mask_bias != 0 or hard_mask:
-        raise ValueError("mask bias and hard mask are supported only for shadow_refine_mask")
+        raise ValueError("mask bias and hard mask require a masked refinement model")
     scene_scores = defaultdict(lambda: {"input": [], "model": []})
     with torch.inference_mode():
         for row, (condition, reference) in zip(data.rows, data):
@@ -54,7 +54,7 @@ if __name__ == "__main__":
     parser.add_argument("--output", type=Path, default=Path("artifacts/final_holdout_40.json"))
     parser.add_argument("--device", choices=("auto", "mps", "cuda", "cpu"), default="auto")
     parser.add_argument("--data", type=Path, default=Path("dataset/raw"))
-    parser.add_argument("--kind", choices=("geometry", "geometry_mask", "shadow_refine_mask"), default="geometry_mask")
+    parser.add_argument("--kind", choices=("geometry", "geometry_mask", "shadow_refine_mask", "shadow_refine_rgb"), default="geometry_mask")
     parser.add_argument("--mask-bias", type=float, default=0.0)
     parser.add_argument("--hard-mask", action="store_true")
     args = parser.parse_args()

@@ -53,26 +53,36 @@ def condition_tensor(rgb_bytes, geometry_bytes, light_bytes):
     return torch.from_numpy(np.ascontiguousarray(channels)).permute(2, 0, 1).unsqueeze(0).contiguous()
 
 
-def run(checkpoint: Path, device_name: str, port: int, frames: int, warmup: int):
+def rgb_tensor(rgb_bytes):
+    rgb = np.frombuffer(rgb_bytes, dtype=np.uint8).reshape(HEIGHT, WIDTH, 3).astype(np.float32) / 255.0
+    return torch.from_numpy(np.ascontiguousarray(rgb)).permute(2, 0, 1).unsqueeze(0).contiguous()
+
+
+def run(checkpoint: Path, device_name: str, port: int, frames: int, warmup: int,
+        kind: str, mask_bias: float, hard_mask: bool, accept_timeout: float):
     device = select_device(device_name)
-    model = build_model("shadow_refine_mask").to(device).eval()
+    rgb_only = kind == "shadow_refine_rgb"
+    model = build_model(kind).to(device).eval()
     model.load_state_dict(torch.load(checkpoint, map_location=device, weights_only=True)["model"])
-    model.mask_bias = 1.5
+    model.mask_bias = mask_bias
+    model.hard_mask = hard_mask
     references = []
     for frame_id in range(12):
         path = Path(f"dataset/shadow_resolution/scene_28/frame_{frame_id:03d}_reference.png")
         references.append(np.asarray(Image.open(path).convert("RGB"), dtype=np.float32) if path.exists() else None)
     with torch.inference_mode():
-        dummy = torch.zeros(1, 11, HEIGHT, WIDTH, device=device)
+        dummy = torch.zeros(1, 3 if rgb_only else 11, HEIGHT, WIDTH, device=device)
         for _ in range(warmup):
             model(dummy)
         synchronize(device)
     measurements = []
+    diagnostic_frames = {0, 1, 11, 12, 23, 24, 35, 36, 37, 38, 39, 40, 47}
+    diagnostic_rgb = {}
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
         listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         listener.bind(("127.0.0.1", port))
         listener.listen(1)
-        listener.settimeout(60)
+        listener.settimeout(accept_timeout)
         print(f"LIVE_SERVER_READY port={port} device={device}", flush=True)
         connection, _ = listener.accept()
         with connection, torch.inference_mode():
@@ -80,10 +90,15 @@ def run(checkpoint: Path, device_name: str, port: int, frames: int, warmup: int)
             for frame in range(frames):
                 start = time.perf_counter()
                 rgb = receive_exact(connection, RGB_BYTES)
-                geometry = receive_exact(connection, GEOMETRY_BYTES)
-                light = receive_exact(connection, 12)
+                if frame in diagnostic_frames:
+                    diagnostic_rgb[frame] = np.frombuffer(rgb, dtype=np.uint8).reshape(HEIGHT, WIDTH, 3).copy()
+                if rgb_only:
+                    geometry, light = None, None
+                else:
+                    geometry = receive_exact(connection, GEOMETRY_BYTES)
+                    light = receive_exact(connection, 12)
                 received = time.perf_counter()
-                condition = condition_tensor(rgb, geometry, light)
+                condition = rgb_tensor(rgb) if rgb_only else condition_tensor(rgb, geometry, light)
                 prepared = time.perf_counter()
                 prediction = model(condition.to(device))
                 synchronize(device)
@@ -109,6 +124,10 @@ def run(checkpoint: Path, device_name: str, port: int, frames: int, warmup: int)
     output_path = Path("artifacts/live_server.json")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(measurements, indent=2) + "\n")
+    diagnostic_dir = output_path.parent / "live_input_samples"
+    diagnostic_dir.mkdir(parents=True, exist_ok=True)
+    for frame, pixels in diagnostic_rgb.items():
+        Image.fromarray(pixels).save(diagnostic_dir / f"frame_{frame:03d}.png")
 
 
 if __name__ == "__main__":
@@ -118,5 +137,11 @@ if __name__ == "__main__":
     parser.add_argument("--port", type=int, default=8766)
     parser.add_argument("--frames", type=int, default=24)
     parser.add_argument("--warmup", type=int, default=10)
+    parser.add_argument("--kind", choices=("shadow_refine_mask", "shadow_refine_rgb"),
+                        default="shadow_refine_mask")
+    parser.add_argument("--mask-bias", type=float, default=1.5)
+    parser.add_argument("--hard-mask", action="store_true")
+    parser.add_argument("--accept-timeout", type=float, default=300.0)
     args = parser.parse_args()
-    run(args.checkpoint, args.device, args.port, args.frames, args.warmup)
+    run(args.checkpoint, args.device, args.port, args.frames, args.warmup,
+        args.kind, args.mask_bias, args.hard_mask, args.accept_timeout)

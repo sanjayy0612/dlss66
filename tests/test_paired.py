@@ -59,6 +59,14 @@ class PairedTests(unittest.TestCase):
         output.mean().backward()
         self.assertIsNotNone(model.strength_head.weight.grad)
 
+    def test_rgb_only_refinement_shape(self):
+        model = ShadowRefinementRenderer(condition_channels=3)
+        condition = torch.rand(1, 3, 16, 24)
+        output, logits = model.forward_with_mask(condition)
+        self.assertEqual(tuple(output.shape), (1, 3, 16, 24))
+        self.assertEqual(tuple(logits.shape), (1, 1, 16, 24))
+        self.assertTrue(torch.equal(output, condition))
+
     def test_refinement_mask_bias_reduces_correction(self):
         model = ShadowRefinementRenderer()
         with torch.no_grad():

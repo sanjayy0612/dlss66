@@ -29,6 +29,9 @@ def build_model(kind: str):
     if kind == "shadow_refine_mask":
         from models.multiscale import ShadowRefinementRenderer
         return ShadowRefinementRenderer()
+    if kind == "shadow_refine_rgb":
+        from models.multiscale import ShadowRefinementRenderer
+        return ShadowRefinementRenderer(condition_channels=3)
     raise ValueError(kind)
 
 
@@ -42,6 +45,7 @@ def run(kind: str, epochs: int, device_name: str, root: Path, output: Path,
     torch.manual_seed(seed)
     device = select_device(device_name)
     use_geometry = kind in {"geometry", "geometry_mask", "shadow_refine_mask"}
+    masked_kind = kind in {"geometry_mask", "shadow_refine_mask", "shadow_refine_rgb"}
     train = ShadowPairs(root, "train", include_geometry=use_geometry)
     validation = ShadowPairs(root, "validation", include_geometry=use_geometry)
     test = ShadowPairs(root, "test", include_geometry=use_geometry)
@@ -59,14 +63,14 @@ def run(kind: str, epochs: int, device_name: str, root: Path, output: Path,
         losses = []
         for x, y in loader:
             x, y = x.to(device), y.to(device)
-            if kind in {"geometry_mask", "shadow_refine_mask"}:
+            if masked_kind:
                 prediction, mask_logits = model.forward_with_mask(x)
             else:
                 prediction = model(x)
             changed = ((x[:, :3] - y).abs().amax(dim=1, keepdim=True) > 5 / 255).float()
             weights = changed * (1 + changed_weight) + (1 - changed) * unchanged_weight
             loss = (weights * (prediction - y).abs()).mean()
-            if kind in {"geometry_mask", "shadow_refine_mask"}:
+            if masked_kind:
                 difference = x[:, :3] - y
                 shadow_target = ((difference if kind == "geometry_mask" else difference.abs())
                                  .amax(dim=1, keepdim=True) > 5 / 255).float()
@@ -89,7 +93,7 @@ def run(kind: str, epochs: int, device_name: str, root: Path, output: Path,
     result = {"kind": kind, "device": str(device), "epochs": epochs,
               "changed_weight": changed_weight,
               "unchanged_weight": unchanged_weight,
-              "mask_pos_weight": mask_pos_weight if kind in {"geometry_mask", "shadow_refine_mask"} else None,
+              "mask_pos_weight": mask_pos_weight if masked_kind else None,
               "parameters": sum(p.numel() for p in model.parameters()),
               "best_epoch": state["epoch"], "input": baseline,
               "model": {"validation": evaluate(model, validation, device),
@@ -101,7 +105,7 @@ def run(kind: str, epochs: int, device_name: str, root: Path, output: Path,
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--kind", choices=("cnn", "multiscale", "geometry", "geometry_mask", "shadow_refine_mask"), default="cnn")
+    parser.add_argument("--kind", choices=("cnn", "multiscale", "geometry", "geometry_mask", "shadow_refine_mask", "shadow_refine_rgb"), default="cnn")
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--device", choices=("auto", "mps", "cuda", "cpu"), default="auto")
     parser.add_argument("--data", type=Path, default=Path("dataset/raw"))
