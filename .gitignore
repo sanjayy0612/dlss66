@@ -10,4 +10,8 @@ dataset/shadow_resolution_fresh/*
 !dataset/shadow_resolution_fresh/.gdignore
 dataset/temporal_test/*
 !dataset/temporal_test/.gdignore
+dataset/motion_test/*
+!dataset/motion_test/.gdignore
+dataset/motion_repeat/*
+!dataset/motion_repeat/.gdignore
 __pycache__/

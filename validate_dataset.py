@@ -42,6 +42,8 @@ for key in sorted(cheap):
     for field in ("seed", "camera_position", "look_at", "effect", "resolution",
                   "camera_near", "camera_far", "light_rotation_degrees", "light_direction_view"):
         assert a_meta[field] == b_meta[field], (key, field)
+    for field in ("moving_center", "moving_radius", "camera_fov"):
+        assert a_meta.get(field) == b_meta.get(field), (key, field)
     cheap_atlas = a_meta.get("shadow_atlas_size", 4096)
     reference_atlas = b_meta.get("shadow_atlas_size", 4096)
     assert cheap_atlas <= reference_atlas, key
@@ -96,6 +98,8 @@ for key in sorted(cheap):
                     "camera_near": near, "camera_far": far,
                     "light_rotation_degrees": a_meta["light_rotation_degrees"],
                     "light_direction_view": a_meta["light_direction_view"],
+                    **({field: a_meta[field] for field in ("moving_center", "moving_radius", "camera_fov")
+                       if field in a_meta}),
                     "cheap_shadow_atlas_size": cheap_atlas,
                     "reference_shadow_atlas_size": reference_atlas})
     if len(records) == 1:

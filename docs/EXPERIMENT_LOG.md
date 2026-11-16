@@ -217,3 +217,31 @@ python3 -m evaluation.final_holdout --device mps --data dataset/temporal_test --
 python3 -m evaluation.temporal --data dataset/temporal_test --device mps --mask-bias 1.5
 python3 -m evaluation.temporal_blend --device mps --mask-bias 1.5 --test-data dataset/temporal_test
 ```
+
+### Smooth camera and moving sphere, 2026-11-15
+
+To test temporal behavior beyond the earlier static 30° camera steps, [`dataset.gd`](../dataset.gd) can now capture 48 poses per orbit (7.5° steps) and move one procedural sphere along a fixed circular path. Its center and radius are saved per frame. Cheap and reference runs use identical scene seeds, camera positions, and sphere transforms; [`validate_dataset.py`](../validate_dataset.py) checks paired metadata. The new scenes **40–41** produced 96 valid pairs with no sky-mask disagreement. A separate repeat of scene 40, frame 0 produced **byte-identical cheap PNG, reference PNG, and RGBA32F geometry**. This proves repeatability for that sampled pose, not every frame or machine.
+
+[`evaluation/temporal.py`](../evaluation/temporal.py) now translates reconstructed sphere surface points between known sphere centers before camera reprojection. It still rejects depth-inconsistent correspondences. This is an **offline known-transform proxy**, not Godot motion vectors or a complete moving-object optical-flow solution. The sphere accounts for only about 0.5–0.6% of frame pixels that pass the visibility test, so object-specific scores have limited coverage.
+
+| Scenes 40–41, 96 frames | Cheap | Original model, weight 20/bias 1.5 | New model, weight 5/bias 1.0 |
+|---|---:|---:|---:|
+| Whole-frame image MAE ↓ | 0.012663 | **0.009307** | 0.009457 |
+| Unchanged-pixel MAE ↓ | **0.000615** | 0.002227 | 0.001673 |
+| Reprojected temporal error ↓ | **0.006195** | 0.007573 | 0.007177 |
+| Improved frames over cheap | — | 90/96 | 89/96 |
+
+The new model uses the **same 80,152-parameter architecture**, seed, 20 epochs, and 32 training scenes, changing only the L1 changed-pixel weight from 20 to 5. Its checkpoint was selected by validation MAE; mask bias **1.0** was also selected on validation scenes 24–27. On the previously unseen static scenes 36–39, it reduced MAE from cheap **0.009874** to **0.007264** (48/48 frames), compared with **0.007514** for the original model. Its unchanged-pixel MAE was **0.001341** versus **0.001841** for the original, but both still exceed cheap **0.000669**. On motion scenes it trades a small increase in image MAE for lower false-change and temporal errors. This does **not** establish absence of invented shadows.
+
+For the new model, validation-selected correction history at strength 0.75 lowered motion-sequence temporal error further from **0.007177 to 0.006598**, while raising image MAE from **0.009457 to 0.009899**. The cheap renderer remained steadier at **0.006195**. The moving-surface temporal metric varied substantially between the two scenes and remains weaker evidence than the whole-frame metric. Visual inspection of `artifacts/shadow_refine_motion_comparison.png` shows residual errors around object shadows and contact edges. The live bridge and the model-only latency were not rerun with the new weights; its operator graph and tensor sizes are unchanged, but equivalent runtime remains an inference.
+
+```sh
+DLSS66_MOTION=1 DLSS66_SCENE_START=40 DLSS66_LAYOUTS=2 DLSS66_FRAMES=48 DLSS66_OUTPUT=dataset/motion_test DLSS66_TASK=shadow_resolution sh collect_dataset.sh
+DLSS66_MOTION=1 DLSS66_SCENE_START=40 DLSS66_LAYOUTS=1 DLSS66_FRAMES=1 DLSS66_OUTPUT=dataset/motion_repeat DLSS66_TASK=shadow_resolution sh collect_dataset.sh
+python3 -m training.train_pairs --kind shadow_refine_mask --changed-weight 5 --epochs 20 --data dataset/shadow_resolution --device mps --output artifacts/shadow_refine_mask_weight5_32.pt
+python3 -m evaluation.calibrate_mask --kind shadow_refine_mask --data dataset/shadow_resolution --checkpoint artifacts/shadow_refine_mask_weight5_32.pt --output artifacts/shadow_refine_weight5_calibration.json --device mps
+python3 -m evaluation.final_holdout --device mps --data dataset/motion_test --kind shadow_refine_mask --mask-bias 1.0 --checkpoint artifacts/shadow_refine_mask_weight5_32.pt --output artifacts/shadow_refine_weight5_motion_test.json
+python3 -m evaluation.temporal --data dataset/motion_test --checkpoint artifacts/shadow_refine_mask_weight5_32.pt --device mps --mask-bias 1.0
+python3 -m evaluation.temporal_blend --device mps --mask-bias 1.0 --checkpoint artifacts/shadow_refine_mask_weight5_32.pt --test-data dataset/motion_test
+python3 -m unittest discover -s tests -q  # 13 tests passed
+```

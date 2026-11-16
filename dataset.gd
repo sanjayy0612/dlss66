@@ -3,6 +3,8 @@ extends Node3D
 const SIZE := Vector2i(256, 144)
 const LAYOUTS := 40
 const FRAMES := 12
+const MOTION_FRAMES := 48
+const MOTION_RADIUS := 0.28
 var output_dir := "res://dataset/raw"
 
 var world_root: Node3D
@@ -14,11 +16,14 @@ var manifest: FileAccess
 var variant: String
 var task: String
 var shadow_atlas_size: int
+var motion_mode := false
+var moving_mesh: MeshInstance3D
 
 func _ready() -> void:
 	get_window().size = SIZE
 	variant = OS.get_environment("DLSS66_VARIANT")
 	task = OS.get_environment("DLSS66_TASK") if OS.has_environment("DLSS66_TASK") else "shadow_off"
+	motion_mode = OS.get_environment("DLSS66_MOTION") == "1"
 	output_dir = "res://" + OS.get_environment("DLSS66_OUTPUT") if OS.has_environment("DLSS66_OUTPUT") else output_dir
 	if variant != "cheap" and variant != "reference":
 		push_error("Set DLSS66_VARIANT to cheap or reference")
@@ -70,14 +75,18 @@ func _ready() -> void:
 		compositor.compositor_effects = [probe]
 		camera.compositor = compositor
 	var layouts := mini(LAYOUTS, maxi(1, int(OS.get_environment("DLSS66_LAYOUTS")) if OS.has_environment("DLSS66_LAYOUTS") else LAYOUTS))
-	var frames := mini(FRAMES, maxi(1, int(OS.get_environment("DLSS66_FRAMES")) if OS.has_environment("DLSS66_FRAMES") else FRAMES))
+	var frame_limit := MOTION_FRAMES if motion_mode else FRAMES
+	var frames := mini(frame_limit, maxi(1, int(OS.get_environment("DLSS66_FRAMES")) if OS.has_environment("DLSS66_FRAMES") else frame_limit))
 	var scene_start := maxi(0, int(OS.get_environment("DLSS66_SCENE_START")) if OS.has_environment("DLSS66_SCENE_START") else 0)
 	for scene_id in range(scene_start, scene_start + layouts):
 		make_layout(scene_id)
 		var scene_seed := (2000 if task == "shadow_resolution" else 1000) + scene_id
 		DirAccess.make_dir_recursive_absolute(output_dir + "/scene_%02d" % scene_id)
 		for frame_id in range(frames):
-			var angle := 0.2 + TAU * float(frame_id) / float(FRAMES)
+			var angle := 0.2 + TAU * float(frame_id) / float(frames)
+			if motion_mode:
+				var phase := TAU * float(frame_id) / float(frames)
+				moving_mesh.position = Vector3(0.9 * cos(phase + 0.4), 0.65, 0.9 * sin(phase + 0.4))
 			camera.position = Vector3(cos(angle) * 3.1, 2.7, sin(angle) * 3.1)
 			camera.look_at(Vector3(0, 0.65, 0))
 			var light_view := camera.global_transform.basis.inverse() * (-sun.global_transform.basis.z)
@@ -124,6 +133,10 @@ func _ready() -> void:
 				"shadow_atlas_size": shadow_atlas_size,
 				"effect": "Shadow atlas 512 versus 4096" if task == "shadow_resolution" else "Directional shadows off versus on",
 				"resolution": [SIZE.x, SIZE.y]}
+			if motion_mode:
+				record["moving_center"] = [moving_mesh.position.x, moving_mesh.position.y, moving_mesh.position.z]
+				record["moving_radius"] = MOTION_RADIUS
+				record["camera_fov"] = camera.fov
 			manifest.store_line(JSON.stringify(record))
 			manifest.flush()
 		print("DATASET_LAYOUT variant=", variant, " scene=", scene_id, " frames=", frames)
@@ -307,6 +320,7 @@ func benchmark_shadow_atlas() -> void:
 	RenderingServer.viewport_set_measure_render_time(viewport_rid, false)
 
 func make_layout(scene_id: int) -> void:
+	moving_mesh = null
 	for child in world_root.get_children():
 		world_root.remove_child(child)
 		child.queue_free()
@@ -332,6 +346,11 @@ func make_layout(scene_id: int) -> void:
 				var sphere := SphereMesh.new()
 				sphere.radius = minf(size.x, size.z) * 0.5
 				make_mesh(sphere, Vector3(pos.x, sphere.radius, pos.z), color)
+	if motion_mode:
+		var moving_sphere := SphereMesh.new()
+		moving_sphere.radius = MOTION_RADIUS
+		moving_sphere.height = MOTION_RADIUS * 2.0
+		moving_mesh = make_mesh(moving_sphere, Vector3(0, 0.65, 0), Color(0.86, 0.31, 0.19))
 	sun = DirectionalLight3D.new()
 	sun.rotation_degrees = Vector3(rng.randf_range(-70, -35), rng.randf_range(-100, 15), 0)
 	sun.shadow_enabled = task == "shadow_resolution" or variant == "reference"
@@ -342,7 +361,7 @@ func make_box(pos: Vector3, size: Vector3, color: Color) -> void:
 	mesh.size = size
 	make_mesh(mesh, pos, color)
 
-func make_mesh(mesh: PrimitiveMesh, pos: Vector3, color: Color) -> void:
+func make_mesh(mesh: PrimitiveMesh, pos: Vector3, color: Color) -> MeshInstance3D:
 	var material := StandardMaterial3D.new()
 	material.albedo_color = color
 	material.roughness = 0.65
@@ -351,3 +370,4 @@ func make_mesh(mesh: PrimitiveMesh, pos: Vector3, color: Color) -> void:
 	instance.mesh = mesh
 	instance.position = pos
 	world_root.add_child(instance)
+	return instance

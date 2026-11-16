@@ -30,6 +30,26 @@ class PairedTests(unittest.TestCase):
             np.testing.assert_allclose(grid[0, :, :, 0], 2 * (xx + 0.5) / 12 - 1, atol=1e-5)
             np.testing.assert_allclose(grid[0, :, :, 1], 2 * (yy + 0.5) / 8 - 1, atol=1e-5)
 
+    def test_known_sphere_translation_reprojects_only_its_pixels(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            near, far = 0.05, 100.0
+            geometry = np.zeros((8, 12, 4), dtype="<f4")
+            geometry[:, :, 0] = (near * far - near) / (far - near)
+            geometry.tofile(root / "geometry.rgba32f")
+            source = {"geometry": "geometry.rgba32f", "resolution": [12, 8],
+                      "camera_near": near, "camera_far": far,
+                      "camera_position": [0, 0, 0], "look_at": [0, 0, -1],
+                      "camera_fov": 75.0, "moving_center": [0, 0, -1],
+                      "moving_radius": 0.5}
+            target = {**source, "moving_center": [0.1, 0, -1]}
+            static_grid, _ = reprojection(root, source, source)
+            grid, visible, moving = reprojection(root, source, target, include_moving=True)
+            self.assertTrue(moving[4, 6] and visible[4, 6])
+            self.assertFalse(moving[0, 0])
+            self.assertGreater(float(grid[0, 4, 6, 0] - static_grid[0, 4, 6, 0]), 0.05)
+            self.assertAlmostEqual(float(grid[0, 0, 0, 0]), float(static_grid[0, 0, 0, 0]))
+
     def test_refinement_starts_as_identity(self):
         model = ShadowRefinementRenderer()
         condition = torch.rand(1, 11, 16, 24)

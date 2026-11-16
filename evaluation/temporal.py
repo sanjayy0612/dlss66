@@ -1,4 +1,4 @@
-"""Offline error stability under camera reprojection on static Godot scenes."""
+"""Offline error stability with camera and optional known sphere motion."""
 
 import argparse
 import json
@@ -35,7 +35,7 @@ def view_depth(root: Path, row):
     return distance
 
 
-def reprojection(root: Path, source, target, depth_tolerance=0.05):
+def reprojection(root: Path, source, target, depth_tolerance=0.05, include_moving=False):
     """Return target grid coordinates and conservative visible-surface mask."""
     height, width = source["resolution"][1], source["resolution"][0]
     if target["resolution"] != source["resolution"]:
@@ -51,6 +51,13 @@ def reprojection(root: Path, source, target, depth_tolerance=0.05):
     y_view = (1 - 2 * (yy + 0.5) / height) * src_depth * tan_v
     world = (pos + src_depth[..., None] * forward +
              x_view[..., None] * right + y_view[..., None] * up)
+    moving = np.zeros((height, width), dtype=bool)
+    if "moving_center" in source and "moving_center" in target:
+        source_center = np.asarray(source["moving_center"], dtype=np.float32)
+        target_center = np.asarray(target["moving_center"], dtype=np.float32)
+        radius = float(source["moving_radius"])
+        moving = np.linalg.norm(world - source_center, axis=2) <= radius + 0.03
+        world[moving] += target_center - source_center
     relative = world - next_pos
     projected_z = np.sum(relative * next_forward, axis=2)
     projected_x = np.sum(relative * next_right, axis=2)
@@ -66,6 +73,8 @@ def reprojection(root: Path, source, target, depth_tolerance=0.05):
     visible = ((src_depth > 0) & (projected_z > 0) & (np.abs(grid_x) < 0.99) &
                (np.abs(grid_y) < 0.99) & (sampled_depth > 0) &
                (np.abs(sampled_depth - projected_z) < depth_tolerance))
+    if include_moving:
+        return grid, torch.from_numpy(visible), torch.from_numpy(moving)
     return grid, torch.from_numpy(visible)
 
 
@@ -89,28 +98,49 @@ def run(data_root: Path, checkpoint: Path, device_name: str, mask_bias: float):
             predicted = model(condition[None].to(device))[0].cpu()
             frame[(row["scene_id"], row["frame_id"])] = (row, condition[:3] - reference,
                                                             predicted - reference)
-    scores = defaultdict(lambda: {"cheap": [], "model": [], "valid_fraction": []})
+    scores = defaultdict(lambda: {"cheap": [], "model": [], "valid_fraction": [],
+                                  "cheap_moving": [], "model_moving": [],
+                                  "cheap_static": [], "model_static": [],
+                                  "moving_fraction": []})
     for (scene_id, frame_id), (row, cheap_error, model_error) in frame.items():
         successor = frame.get((scene_id, frame_id + 1))
         if successor is None:
             continue
         next_row, next_cheap_error, next_model_error = successor
-        grid, visible = reprojection(data_root, row, next_row)
+        grid, visible, moving = reprojection(data_root, row, next_row, include_moving=True)
         if not visible.any():
             continue
         scores[scene_id]["cheap"].append(temporal_mae(cheap_error, next_cheap_error, grid, visible))
         scores[scene_id]["model"].append(temporal_mae(model_error, next_model_error, grid, visible))
         scores[scene_id]["valid_fraction"].append(visible.float().mean().item())
-    per_scene = {str(scene): {"cheap_temporal_error": float(np.mean(values["cheap"])),
-                              "model_temporal_error": float(np.mean(values["model"])),
-                              "mean_valid_fraction": float(np.mean(values["valid_fraction"])),
-                              "transitions": len(values["cheap"])}
-                 for scene, values in scores.items()}
+        if "moving_center" in row:
+            scores[scene_id]["moving_fraction"].append((visible & moving).float().mean().item())
+            for name, error, next_error in (("cheap", cheap_error, next_cheap_error),
+                                            ("model", model_error, next_model_error)):
+                for region, mask in (("moving", visible & moving), ("static", visible & ~moving)):
+                    value = temporal_mae(error, next_error, grid, mask)
+                    if value is not None:
+                        scores[scene_id][f"{name}_{region}"].append(value)
+    per_scene = {}
+    for scene, values in scores.items():
+        entry = {"cheap_temporal_error": float(np.mean(values["cheap"])),
+                 "model_temporal_error": float(np.mean(values["model"])),
+                 "mean_valid_fraction": float(np.mean(values["valid_fraction"])),
+                 "transitions": len(values["cheap"])}
+        if values["moving_fraction"]:
+            entry["mean_moving_valid_fraction"] = float(np.mean(values["moving_fraction"]))
+            for name in ("cheap", "model"):
+                for region in ("moving", "static"):
+                    samples = values[f"{name}_{region}"]
+                    entry[f"{name}_{region}_temporal_error"] = float(np.mean(samples)) if samples else None
+        per_scene[str(scene)] = entry
     result = {"data": str(data_root), "device": str(device), "mask_bias": mask_bias,
               "mean_cheap_temporal_error": float(np.mean([x for v in scores.values() for x in v["cheap"]])),
               "mean_model_temporal_error": float(np.mean([x for v in scores.values() for x in v["model"]])),
               "per_scene": per_scene,
-              "note": "Static scenes, 30-degree camera steps, depth-tested reprojection; not a real-time video test."}
+              "note": ("Known-sphere translation and smooth camera, depth-tested reprojection; "
+                       "not an engine motion-vector or real-time video test." if any("moving_center" in row for row, _, _ in frame.values())
+                       else "Static scenes, 30-degree camera steps, depth-tested reprojection; not a real-time video test.")}
     print(json.dumps(result, indent=2))
     return result
 
