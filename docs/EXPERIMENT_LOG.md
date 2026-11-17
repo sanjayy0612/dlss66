@@ -375,3 +375,33 @@ PYTHONPATH=. python3 -m unittest discover -s tests -q
 ```
 
 The paired holdout and temporal metric commands were repeated in the current execution environment on CPU; they matched the saved MPS experiment results to the shown precision. The current Python runtime reports MPS unavailable, so this turn did not repeat training or live Godot profiling on the Mac GPU. The full unit suite passed: **21 tests**, plus the two-step CPU synthetic training smoke test. Local motion datasets and checkpoints remain ignored by Git.
+
+### Explicit recurrent conditioning, 2026-11-17
+
+The previous experiment's loss changed a single-frame network but gave it no prior-frame input. [`TemporalShadowRefinementRenderer`](../models/temporal.py) now takes 15 channels: current RGB, depth, normals, geometry-valid mask and light direction (11); previous predicted RGB correction after depth-tested reprojection (3); and a correspondence-valid mask (1). Its first convolution copies the spatial checkpoint weights and zero-initializes the four new input slices. A unit test confirms that arbitrary history initially leaves the spatial model output unchanged. The model has **80,584 parameters**, 432 more than the spatial model.
+
+[`training/train_recurrent.py`](../training/train_recurrent.py) trains on three-frame rollouts. The first frame uses empty history. The next two frames use the model's own prior predicted correction, reprojected into the current view. The correction is detached between steps, so this is truncated recurrent training rather than full backpropagation through time. Supervised weighted L1, mask BCE and depth-tested error-consistency loss are applied across the three predictions. [`evaluation/evaluate_recurrent.py`](../evaluation/evaluate_recurrent.py) evaluates full sequences with the model's own outputs fed back. This exposes rollout drift that a shuffled single-frame metric cannot measure.
+
+Two CPU training runs were completed on the M2 because the installed PyTorch 2.13.0 Python 3.13 build and the installed Python 3.12 PyTorch 2.7.1 build both report MPS unavailable. The five-epoch run with temporal loss weight 0.5 selected epoch 2. A three-epoch run with weight 2.0 also selected epoch 2 and gave slightly better validation values. Bias 4 failed the 0.1% moving validation false-darkening cap; bias 4.25 passed at 0.0937%, and had lower frame MAE than the next tested safe bias, 4.5. This threshold was fixed before running the held-out test sequences.
+
+At validation bias 4.25, the stronger temporal-loss model produced:
+
+| Split | Cheap frame MAE | Recurrent frame MAE | Cheap temporal error | Recurrent temporal error | False darkening |
+|---|---:|---:|---:|---:|---:|
+| Static validation, scenes 24–27 | 0.011232 | **0.008169** | 0.005209 | 0.006722 | 0.0829% |
+| Moving validation, scenes 24–27 | 0.011931 | **0.008750** | 0.006042 | 0.006725 | 0.0937% |
+| Static holdout, scenes 36–39 | 0.009874 | **0.007956** | 0.005108 | 0.006131 | 0.0486% |
+| Moving holdout, scenes 40–41 | 0.012663 | **0.009766** | 0.006195 | 0.006856 | 0.0922% |
+
+Frame quality improved on both held-out sets, with false darkening below the 0.1% cap. Temporal error did not: it is about **20.0% higher** on the static holdout and **10.7% higher** on the moving holdout than the cheap renderer. A same-checkpoint validation ablation found that recurrent history slightly reduced frame MAE, but did not reduce temporal error versus running the same weights without history. Raising temporal loss weight from 0.5 to 2.0 changed validation temporal error only from about 0.00681 to 0.00675. This recurrent design therefore does not meet the temporal goal. The CPU training demonstrates end-to-end trainability only; MPS inference latency and live Godot integration were not measured.
+
+Commands for the full training and held-out rollout evaluation:
+
+```sh
+OMP_NUM_THREADS=4 python3 -m training.train_recurrent --data dataset/shadow_resolution --motion-data dataset/motion_train --validation-data dataset/motion_validation --init-checkpoint artifacts/shadow_refine_mask_balanced2_32.pt --output artifacts/shadow_refine_recurrent_m2_temporal2.pt --device cpu --epochs 3 --batch-size 1 --temporal-weight 2.0
+OMP_NUM_THREADS=4 python3 -m evaluation.evaluate_recurrent --checkpoint artifacts/shadow_refine_recurrent_m2_temporal2.pt --data dataset/temporal_test --split test --output artifacts/recurrent_static_test.json --device cpu --mask-bias 4.25
+OMP_NUM_THREADS=4 python3 -m evaluation.evaluate_recurrent --checkpoint artifacts/shadow_refine_recurrent_m2_temporal2.pt --data dataset/motion_test --split test --output artifacts/recurrent_motion_test.json --device cpu --mask-bias 4.25
+PYTHONPATH=. python3 -m unittest discover -s tests -q
+```
+
+The 24-test suite passed after adding the recurrent model, including parameter-transfer, arbitrary-history initialization, tensor-shape, visibility-mask, temporal-loss and candidate-selection checks. The full Godot bridge remains at 166.58 ms median on the 11-channel MPS path; this recurrent external route has not been profiled, and CPU-only model experiments do not establish real-time feasibility.

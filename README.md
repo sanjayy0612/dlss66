@@ -52,7 +52,7 @@ python3 -m evaluation.benchmark_refinement --device auto
 python3 -m evaluation.visualize_refinement --data dataset/shadow_resolution_fresh --scenes 32 33 34 35 --mask-bias 1.5 --device auto
 ```
 
-On the M2, the 80,152-parameter model reduced uncalibrated test MAE from 0.01136 to 0.01029 but initially worsened one scene. The current spatial model uses `changed_weight=5`, `unchanged_weight=2`, and a hard confidence threshold selected on validation. A later motion-aware fine-tune reduced MAE on held-out static scenes 36–39 from 0.009874 to 0.008152 and on moving scenes 40–41 from 0.012663 to 0.010165. All 144 frames improved, with false darkening of 0.034% static and 0.064% moving under the 0.1% target. The temporal result is still insufficient: reprojection error was 0.006795 versus 0.006195 for cheap rendering; validation-selected history blending lowered it to 0.006598 but did not beat the renderer. See [EXPERIMENT_LOG.md](docs/EXPERIMENT_LOG.md).
+On the M2, the 80,152-parameter spatial model reduced uncalibrated test MAE from 0.01136 to 0.01029 but initially worsened one scene. A motion-aware fine-tune improved held-out static and moving MAE while keeping measured false darkening under 0.1%, but temporal error remained above the cheap renderer. The next 80,584-parameter recurrent model takes reprojected prior corrections as explicit input. It improved held-out frame MAE, but temporal error was still 20.0% higher on static scenes and 10.7% higher on moving scenes than cheap rendering. Its CPU training path ran on the M2; MPS inference and real-time integration have not been tested. See [EXPERIMENT_LOG.md](docs/EXPERIMENT_LOG.md).
 
 ## Live M2 feasibility check
 
