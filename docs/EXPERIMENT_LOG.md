@@ -350,3 +350,28 @@ The successful one-frame probe and 48-frame rerun both used:
 python3 -m evaluation.serve_live --checkpoint artifacts/shadow_refine_mask_balanced2_32.pt --kind shadow_refine_mask --device mps --port 8766 --frames 48 --warmup 10 --mask-bias 4 --hard-mask --accept-timeout 300
 DLSS66_VARIANT=cheap DLSS66_TASK=shadow_resolution DLSS66_LIVE_FRAMES=48 DLSS66_OUTPUT=dataset/shadow_resolution tools/Godot.app/Contents/MacOS/Godot --path . -- --live
 ```
+
+### Motion-aware temporal-loss fine-tune, 2026-11-17
+
+The single-frame model had better held-out frame MAE but worse temporal error than the cheap renderer. [`training/train_temporal.py`](../training/train_temporal.py) fine-tunes the same 80,152-parameter masked model with consecutive frame pairs. It adds a depth-tested reprojection loss on the model's error relative to the reference. Training used the existing static training split plus four moving training layouts (452 paired frames total); selection used static validation plus four separate moving validation layouts (48 static pairs, 192 moving pairs, and 188 transitions). The 96 frames in moving scenes 40–41 remained held out.
+
+The best checkpoint was epoch 5. On moving validation, frame MAE fell from **0.007853 to 0.007343**, and the reprojection temporal error fell slightly from **0.007023 to 0.006879**. On the separate moving test scenes, at the same hard mask bias 4, fine-tuning lowered image MAE from **0.010432 to 0.010165** (all 96 frames improved over cheap input) and raised false darkening from **0.0506% to 0.0635%**, still under the 0.1% target. On the fresh static holdout scenes 36–39, MAE was **0.008152** versus **0.009874** for cheap input; all 48 frames improved, with false darkening **0.0343%**. Compared with the original checkpoint on those same static scenes, fine-tuning also reduced MAE from **0.008392 to 0.008152**.
+
+Temporal generalization did not improve. On moving test scenes 40–41, the original model's reprojection temporal error was **0.006738** and the fine-tuned model's was **0.006795**; the cheap renderer was **0.006195**. A history correction blend selected only on moving validation scenes (bias 4, residual blend 0.25 under the unchanged-pixel darkening cap) lowered test temporal error to **0.006598** and kept false darkening at **0.0836%**. It still trails cheap rendering. A separate disagreement-aware blend sweep made a smaller gain (0.006795 to 0.006732 on test) and was not added to the code. These are offline, depth-tested known-transform reprojection metrics, not live temporal integration or engine motion-vector results.
+
+This result supports the spatial model's held-out image improvement, but rejects the claim that adding a single-frame reprojection loss is enough to solve temporal consistency. The next temporal model should receive the reprojected previous correction as an explicit input and be trained/evaluated recurrently, including its own prior predictions to measure rollout drift. The current renderer bridge is still too slow for real-time use (166.58 ms median for the 11-channel path); model changes alone cannot remove its geometry and RGB readback waits.
+
+Commands for the motion-aware fine-tune and the matched held-out comparison:
+
+```sh
+python3 -m training.train_temporal --data dataset/shadow_resolution --motion-data dataset/motion_train --validation-data dataset/motion_validation --init-checkpoint artifacts/shadow_refine_mask_balanced2_32.pt --output artifacts/shadow_refine_temporal_motion4_32.pt --device mps --epochs 5 --batch-size 2 --temporal-weight 0.5
+python3 -m evaluation.final_holdout --data dataset/temporal_test --kind shadow_refine_mask --mask-bias 4 --hard-mask --checkpoint artifacts/shadow_refine_temporal_motion4_32.pt --device mps --output artifacts/temporal_motion4_static_holdout_bias4.json
+python3 -m evaluation.final_holdout --data dataset/motion_test --kind shadow_refine_mask --mask-bias 4 --hard-mask --checkpoint artifacts/shadow_refine_mask_balanced2_32.pt --device mps --output artifacts/base_motion_holdout_bias4.json
+python3 -m evaluation.final_holdout --data dataset/motion_test --kind shadow_refine_mask --mask-bias 4 --hard-mask --checkpoint artifacts/shadow_refine_temporal_motion4_32.pt --device mps --output artifacts/temporal_motion4_motion_holdout_bias4.json
+python3 -m evaluation.temporal --data dataset/motion_test --checkpoint artifacts/shadow_refine_mask_balanced2_32.pt --device mps --mask-bias 4 --hard-mask
+python3 -m evaluation.temporal --data dataset/motion_test --checkpoint artifacts/shadow_refine_temporal_motion4_32.pt --device mps --mask-bias 4 --hard-mask
+python3 -m evaluation.temporal_blend --validation-data dataset/motion_validation --test-data dataset/motion_test --checkpoint artifacts/shadow_refine_temporal_motion4_32.pt --device mps --mask-bias 4 --hard-mask --max-false-darken-rate 0.001 --output artifacts/temporal_motion4_bias4_safe.json
+PYTHONPATH=. python3 -m unittest discover -s tests -q
+```
+
+The paired holdout and temporal metric commands were repeated in the current execution environment on CPU; they matched the saved MPS experiment results to the shown precision. The current Python runtime reports MPS unavailable, so this turn did not repeat training or live Godot profiling on the Mac GPU. The full unit suite passed: **21 tests**, plus the two-step CPU synthetic training smoke test. Local motion datasets and checkpoints remain ignored by Git.

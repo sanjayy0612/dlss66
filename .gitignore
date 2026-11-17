@@ -14,4 +14,8 @@ dataset/motion_test/*
 !dataset/motion_test/.gdignore
 dataset/motion_repeat/*
 !dataset/motion_repeat/.gdignore
+dataset/motion_train/*
+!dataset/motion_train/.gdignore
+dataset/motion_validation/*
+!dataset/motion_validation/.gdignore
 __pycache__/

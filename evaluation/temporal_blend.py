@@ -76,8 +76,21 @@ def score(root, scenes, alpha, mode="rgb"):
             "scenes": scene_results}
 
 
+def select_candidate(candidates, validation_scores, max_false_darken_rate=None):
+    eligible = list(candidates)
+    if max_false_darken_rate is not None:
+        eligible = [item for item in eligible
+                    if validation_scores[f"{item[0]}:{item[1]}"]["unchanged_darken_rate_gt_5_255"]
+                    <= max_false_darken_rate]
+    if not eligible:
+        raise ValueError("no temporal candidate meets the validation false-darkening limit")
+    return min(eligible, key=lambda item:
+               validation_scores[f"{item[0]}:{item[1]}"]["mae"] +
+               validation_scores[f"{item[0]}:{item[1]}"]["temporal_error"])
+
+
 def run(validation_root, test_root, checkpoint, device_name, mask_bias, hard_mask=False,
-        kind="shadow_refine_mask"):
+        kind="shadow_refine_mask", output=None, max_false_darken_rate=None):
     device = select_device(device_name)
     model = build_model(kind).to(device).eval()
     model.load_state_dict(torch.load(checkpoint, map_location=device, weights_only=True)["model"])
@@ -90,14 +103,19 @@ def run(validation_root, test_root, checkpoint, device_name, mask_bias, hard_mas
     validation_scores = {f"{mode}:{alpha}": score(validation_root, validation, alpha, mode)
                          for mode, alpha in candidates}
     # Equal weight on image error and reprojected error is a declared choice, not a universal metric.
-    selected = min(candidates, key=lambda item: validation_scores[f"{item[0]}:{item[1]}"]["mae"] +
-                   validation_scores[f"{item[0]}:{item[1]}"]["temporal_error"])
+    selected = select_candidate(candidates, validation_scores, max_false_darken_rate)
     result = {"device": str(device), "mask_bias": mask_bias,
               "hard_mask": hard_mask, "kind": kind,
+              "selection": {"metric": "validation MAE + temporal error",
+                            "max_unchanged_darken_rate_gt_5_255": max_false_darken_rate},
               "selected_mode": selected[0], "selected_alpha": selected[1],
               "validation": validation_scores,
               "fresh_test_no_history": score(test_root, fresh_test, 0.0),
               "fresh_test_selected": score(test_root, fresh_test, selected[1], selected[0])}
+    if output is not None:
+        output = Path(output)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps(result, indent=2) + "\n")
     print(json.dumps(result, indent=2))
     return result
 
@@ -112,6 +130,11 @@ if __name__ == "__main__":
     parser.add_argument("--hard-mask", action="store_true")
     parser.add_argument("--kind", choices=("shadow_refine_mask", "shadow_refine_rgb"),
                         default="shadow_refine_mask")
+    parser.add_argument("--output", type=Path, default=None,
+                        help="Optional path for the full validation and held-out JSON results")
+    parser.add_argument("--max-false-darken-rate", type=float, default=None,
+                        help="Optional validation constraint on unchanged pixels darkened by >5/255")
     args = parser.parse_args()
     run(args.validation_data, args.test_data, args.checkpoint, args.device,
-        args.mask_bias, args.hard_mask, args.kind)
+        args.mask_bias, args.hard_mask, args.kind, args.output,
+        args.max_false_darken_rate)
