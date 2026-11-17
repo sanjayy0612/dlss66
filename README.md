@@ -52,7 +52,7 @@ python3 -m evaluation.benchmark_refinement --device auto
 python3 -m evaluation.visualize_refinement --data dataset/shadow_resolution_fresh --scenes 32 33 34 35 --mask-bias 1.5 --device auto
 ```
 
-On the M2, the 80,152-parameter spatial model reduced uncalibrated test MAE from 0.01136 to 0.01029 but initially worsened one scene. A motion-aware fine-tune improved held-out static and moving MAE while keeping measured false darkening under 0.1%, but temporal error remained above the cheap renderer. The next 80,584-parameter recurrent model takes reprojected prior corrections as explicit input. It improved held-out frame MAE, but temporal error was still 20.0% higher on static scenes and 10.7% higher on moving scenes than cheap rendering. Its CPU training path ran on the M2; MPS inference and real-time integration have not been tested. See [EXPERIMENT_LOG.md](docs/EXPERIMENT_LOG.md).
+On the M2, the 80,152-parameter spatial model reduced uncalibrated test MAE from 0.01136 to 0.01029 but initially worsened one scene. The 80,584-parameter recurrent model takes reprojected prior corrections as explicit input. Its MPS-trained checkpoint improved held-out static and moving MAE by about 18% and 20%, with false darkening under 0.1%. Temporal error remained about 12% and 7% above cheap rendering. Uniform history blending failed the preservation constraint. A 100-sample MPS benchmark measured 2.43 ms median model-only latency and 3.80 ms for synthetic input transfer, history warp, inference, and readback. This excludes Godot rendering and buffer export; real-time end-to-end integration is still unproven. See [EXPERIMENT_LOG.md](docs/EXPERIMENT_LOG.md).
 
 ## Live M2 feasibility check
 

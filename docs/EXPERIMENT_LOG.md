@@ -374,7 +374,7 @@ python3 -m evaluation.temporal_blend --validation-data dataset/motion_validation
 PYTHONPATH=. python3 -m unittest discover -s tests -q
 ```
 
-The paired holdout and temporal metric commands were repeated in the current execution environment on CPU; they matched the saved MPS experiment results to the shown precision. The current Python runtime reports MPS unavailable, so this turn did not repeat training or live Godot profiling on the Mac GPU. The full unit suite passed: **21 tests**, plus the two-step CPU synthetic training smoke test. Local motion datasets and checkpoints remain ignored by Git.
+The paired holdout and temporal metric commands were repeated in the sandboxed execution environment on CPU; they matched earlier MPS results closely. At that time, the sandboxed Python runtime reported MPS unavailable. A later out-of-sandbox probe showed that the installed PyTorch 2.13.0 build has MPS support and that the sandbox was hiding the device. The MPS recurrent training, evaluation, and latency results are recorded below. The full unit suite passed: **21 tests**, plus the two-step CPU synthetic training smoke test. Local motion datasets and checkpoints remain ignored by Git.
 
 ### Explicit recurrent conditioning, 2026-11-17
 
@@ -382,7 +382,7 @@ The previous experiment's loss changed a single-frame network but gave it no pri
 
 [`training/train_recurrent.py`](../training/train_recurrent.py) trains on three-frame rollouts. The first frame uses empty history. The next two frames use the model's own prior predicted correction, reprojected into the current view. The correction is detached between steps, so this is truncated recurrent training rather than full backpropagation through time. Supervised weighted L1, mask BCE and depth-tested error-consistency loss are applied across the three predictions. [`evaluation/evaluate_recurrent.py`](../evaluation/evaluate_recurrent.py) evaluates full sequences with the model's own outputs fed back. This exposes rollout drift that a shuffled single-frame metric cannot measure.
 
-Two CPU training runs were completed on the M2 because the installed PyTorch 2.13.0 Python 3.13 build and the installed Python 3.12 PyTorch 2.7.1 build both report MPS unavailable. The five-epoch run with temporal loss weight 0.5 selected epoch 2. A three-epoch run with weight 2.0 also selected epoch 2 and gave slightly better validation values. Bias 4 failed the 0.1% moving validation false-darkening cap; bias 4.25 passed at 0.0937%, and had lower frame MAE than the next tested safe bias, 4.5. This threshold was fixed before running the held-out test sequences.
+Initial recurrent training used CPU because the sandbox reported MPS unavailable. The five-epoch run with temporal loss weight 0.5 selected epoch 2. A three-epoch run with weight 2.0 also selected epoch 2 and gave slightly better validation values. Bias 4 failed the 0.1% moving validation false-darkening cap; bias 4.25 passed at 0.0937%, and had lower frame MAE than the next tested safe bias, 4.5. This threshold was fixed before running the held-out test sequences.
 
 At validation bias 4.25, the stronger temporal-loss model produced:
 
@@ -393,7 +393,7 @@ At validation bias 4.25, the stronger temporal-loss model produced:
 | Static holdout, scenes 36–39 | 0.009874 | **0.007956** | 0.005108 | 0.006131 | 0.0486% |
 | Moving holdout, scenes 40–41 | 0.012663 | **0.009766** | 0.006195 | 0.006856 | 0.0922% |
 
-Frame quality improved on both held-out sets, with false darkening below the 0.1% cap. Temporal error did not: it is about **20.0% higher** on the static holdout and **10.7% higher** on the moving holdout than the cheap renderer. A same-checkpoint validation ablation found that recurrent history slightly reduced frame MAE, but did not reduce temporal error versus running the same weights without history. Raising temporal loss weight from 0.5 to 2.0 changed validation temporal error only from about 0.00681 to 0.00675. This recurrent design therefore does not meet the temporal goal. The CPU training demonstrates end-to-end trainability only; MPS inference latency and live Godot integration were not measured.
+Frame quality improved on both held-out sets, with false darkening below the 0.1% cap. Temporal error did not: it is about **20.0% higher** on the static holdout and **10.7% higher** on the moving holdout than the cheap renderer. A same-checkpoint validation ablation found that recurrent history slightly reduced frame MAE, but did not reduce temporal error versus running the same weights without history. Raising temporal loss weight from 0.5 to 2.0 changed validation temporal error only from about 0.00681 to 0.00675. This recurrent design therefore does not meet the temporal goal. The earlier CPU training is superseded by the MPS run below; live Godot integration remains unmeasured for the recurrent model.
 
 Commands for the full training and held-out rollout evaluation:
 
@@ -405,3 +405,56 @@ PYTHONPATH=. python3 -m unittest discover -s tests -q
 ```
 
 The 24-test suite passed after adding the recurrent model, including parameter-transfer, arbitrary-history initialization, tensor-shape, visibility-mask, temporal-loss and candidate-selection checks. The full Godot bridge remains at 166.58 ms median on the 11-channel MPS path; this recurrent external route has not been profiled, and CPU-only model experiments do not establish real-time feasibility.
+
+### Stronger temporal objective and safe-history check, 2026-11-17
+
+Two more short CPU training runs tested whether a stronger consistency loss could close the temporal gap. The 3-epoch run at `temporal_weight=10` selected epoch 1 by its validation objective. It retained the hard-gate bias 4, which was fixed before test evaluation and measured **0.0696%** false darkening on moving validation. Compared with `temporal_weight=2`, its validation temporal error fell from **0.006754 to 0.006470**; the cheap validation value was **0.006042**. Frame MAE was 0.009004 on moving validation versus 0.011931 for cheap input.
+
+On the untouched scenes 36–39 and 40–41, this checkpoint reduced frame MAE from **0.009874 to 0.008103** (static) and **0.012663 to 0.010088** (moving). False darkening was **0.0321%** and **0.0755%**, respectively. Temporal error was still worse than the cheap renderer: **0.005739 vs 0.005108** on static scenes and **0.006642 vs 0.006195** on moving scenes. The stronger loss reduced temporal error relative to the weight-2 checkpoint, but did not solve the gap.
+
+On the weight-2 recurrent checkpoint, we also tested a post-model blend of current correction with the reprojected previous correction (`alpha` = 0, 0.25, 0.5, 0.75) on validation. Candidate selection used mean frame MAE plus mean temporal error, subject to a maximum 0.1% false-darkening rate on both static and moving validation. `alpha=0` was the only eligible candidate: `alpha=0.25` exceeded the cap on moving validation (0.125%), and larger blends exceeded it further. The filter therefore could not be applied safely under this preservation constraint. The weight-10 test set was not used to select checkpoint or threshold, and no test sequence was used to select blend strength.
+
+This experiment reinforces the main trade-off: stronger temporal supervision and history can lower flicker, but shadow correction can spill onto pixels that the reference says should remain unchanged. The next model change should predict a confidence/uncertainty for reprojected history and train it against visibility and per-pixel correction error, rather than blending history uniformly. The 25-test suite passed after fixing a blend-test expectation. These initial runs used M2 CPU because the sandbox hid MPS; an out-of-sandbox MPS training run and benchmark follow.
+
+Reproduction commands:
+
+```sh
+OMP_NUM_THREADS=4 python3 -m training.train_recurrent --data dataset/shadow_resolution --motion-data dataset/motion_train --validation-data dataset/motion_validation --init-checkpoint artifacts/shadow_refine_mask_balanced2_32.pt --output artifacts/shadow_refine_recurrent_m2_temporal10.pt --device cpu --epochs 3 --batch-size 1 --temporal-weight 10.0
+OMP_NUM_THREADS=4 python3 -m evaluation.evaluate_recurrent --checkpoint artifacts/shadow_refine_recurrent_m2_temporal10.pt --data dataset/temporal_test --split test --output artifacts/recurrent_static_test.json --device cpu --mask-bias 4
+OMP_NUM_THREADS=4 python3 -m evaluation.evaluate_recurrent --checkpoint artifacts/shadow_refine_recurrent_m2_temporal10.pt --data dataset/motion_test --split test --output artifacts/recurrent_motion_test.json --device cpu --mask-bias 4
+PYTHONPATH=. python3 -m unittest discover -s tests -q
+```
+
+### MPS training, held-out inference, and latency, 2026-11-17
+
+The MPS issue was environmental. Both installed PyTorch builds reported `is_built() == True` but `is_available() == False` inside the sandbox. An approved probe outside the sandbox returned `is_available() == True` and successfully created and summed an MPS tensor. The same PyTorch 2.13.0 Python 3.13 installation was used for the following run.
+
+The recurrent model was trained on MPS for 3 epochs with temporal loss weight 10; validation selected epoch 1. At hard-gate bias 4, validation motion MAE was **0.008992** versus cheap **0.011931**, and temporal error was **0.006473** versus cheap **0.006042**. This matched the CPU run closely. The checkpoint was then evaluated on untouched held-out scenes:
+
+| Split | Cheap frame MAE | MPS recurrent MAE | Cheap temporal error | MPS recurrent temporal error | False darkening |
+|---|---:|---:|---:|---:|---:|
+| Static scenes 36–39 | 0.009874 | **0.008095** | 0.005108 | 0.005747 | 0.0329% |
+| Moving scenes 40–41 | 0.012663 | **0.010072** | 0.006195 | 0.006646 | 0.0766% |
+
+Thus MPS inference confirms the CPU image-quality and temporal trade-off. Frame MAE improves by about 18% static and 20% moving; temporal error remains about 12% and 7% higher than cheap rendering. No test sequence was used for checkpoint or threshold selection.
+
+[`evaluation/benchmark_recurrent.py`](../evaluation/benchmark_recurrent.py) measured 100 synchronized samples at 256×144, after 10 warmups:
+
+| Recurrent inference path | p50 | p95 |
+|---|---:|---:|
+| Model only, tensors already on MPS | 2.43 ms | 2.69 ms |
+| CPU-to-MPS tensor handoff | 1.01 ms | 1.09 ms |
+| History warp plus model | 2.60 ms | 3.36 ms |
+| MPS-to-CPU output readback | 0.19 ms | 0.22 ms |
+| Handoff, warp, model, and readback | **3.80 ms** | **4.63 ms** |
+
+The benchmark uses synthetic CPU tensors and an identity reprojection grid. It excludes Godot rendering, real geometry export, geometry-readback wait, IPC and presentation. It is not an end-to-end frame rate. The earlier 11-channel Godot bridge measured **166.58 ms median**; the recurrent path has not yet been integrated into that bridge. The current evidence shows the model compute is small enough for a real-time budget, while end-to-end feasibility remains open because renderer synchronization and readback dominate.
+
+Reproduction commands:
+
+```sh
+python3 -m training.train_recurrent --data dataset/shadow_resolution --motion-data dataset/motion_train --validation-data dataset/motion_validation --init-checkpoint artifacts/shadow_refine_mask_balanced2_32.pt --output artifacts/shadow_refine_recurrent_m2_mps_temporal10.pt --device mps --epochs 3 --batch-size 1 --temporal-weight 10.0
+python3 -c "from pathlib import Path; from evaluation.evaluate_recurrent import run; run(Path('artifacts/shadow_refine_recurrent_m2_mps_temporal10.pt'), Path('dataset/temporal_test'), 'test', Path('artifacts/recurrent_mps_static_test.json'), 'mps', 4.0, True); run(Path('artifacts/shadow_refine_recurrent_m2_mps_temporal10.pt'), Path('dataset/motion_test'), 'test', Path('artifacts/recurrent_mps_motion_test.json'), 'mps', 4.0, True)"
+python3 -m evaluation.benchmark_recurrent --checkpoint artifacts/shadow_refine_recurrent_m2_mps_temporal10.pt --device mps --width 256 --height 144 --warmup 10 --samples 100 --output artifacts/recurrent_mps_benchmark.json
+PYTHONPATH=. python3 -m unittest discover -s tests -q
+```

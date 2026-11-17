@@ -71,6 +71,16 @@ def temporal_input(previous_prediction, previous_condition, grid, visible):
     return warped * valid, valid
 
 
+def blend_history_correction(prediction, current_rgb, history, visible, alpha):
+    """Blend a prior reprojection into the current correction on visible pixels."""
+    if not 0.0 <= alpha <= 1.0:
+        raise ValueError("history blend alpha must be between zero and one")
+    correction = prediction - current_rgb
+    candidate = torch.clamp(current_rgb + (1 - alpha) * correction + alpha * history,
+                            0.0, 1.0)
+    return torch.where(visible.bool(), candidate, prediction)
+
+
 def supervised_frame_loss(prediction, logits, condition, reference,
                           changed_weight, unchanged_weight):
     rgb = condition[:, :3]
@@ -84,7 +94,7 @@ def supervised_frame_loss(prediction, logits, condition, reference,
 
 @torch.inference_mode()
 def evaluate_rollouts(model, data, device, mask_bias=4.0, hard_mask=True,
-                      max_scenes=None):
+                      max_scenes=None, history_blend_alpha=0.0):
     """Run whole scene sequences with model predictions fed back as history."""
     from collections import defaultdict
 
@@ -121,6 +131,10 @@ def evaluate_rollouts(model, data, device, mask_bias=4.0, hard_mask=True,
                     previous_prediction - previous_condition[:3][None].to(device),
                     grid, mode="bilinear", padding_mode="zeros", align_corners=False) * valid
             prediction, _ = model.forward_temporal(condition_device, history, valid)
+            if history_blend_alpha > 0:
+                prediction = blend_history_correction(
+                    prediction, condition_device[:, :3], history, valid,
+                    history_blend_alpha)
             prediction_cpu = prediction[0].cpu()
             predictions.append(prediction_cpu)
             mae = (prediction_cpu - reference).abs().mean().item()
