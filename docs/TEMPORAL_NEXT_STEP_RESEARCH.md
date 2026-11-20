@@ -71,3 +71,18 @@ python3 -m training.combine_manifests --output dataset/expanded_static_train --s
 python3 -m training.combine_manifests --output dataset/expanded_motion_train --source dataset/motion_train train train --source dataset/preservation_motion_fresh test train
 python3 -m training.train_recurrent --data dataset/expanded_static_train --motion-data dataset/expanded_motion_train --validation-data dataset/motion_validation --init-checkpoint artifacts/shadow_refine_confidence_preserved_mps.pt --output artifacts/shadow_refine_confidence_expanded_mps.pt --device mps --epochs 3 --batch-size 1 --temporal-weight 10 --confidence-gate --confidence-weight 0.25 --preservation-weight 5 --selection-mask-bias 5 --max-false-darken-rate 0.001
 ```
+
+## Boundary weighted loss iteration, 2026-11-20
+
+The next iteration replaced uniform preservation weighting with a 5× weight near reference shadow boundaries, using a three-pixel radius. The expanded-scene checkpoint was fine-tuned for three MPS epochs; epoch 1 was selected by the existing validation objective and preservation cap. New Godot scenes 50–51 (static) and 52–53 (moving) were captured for test after selection. Both datasets passed capture validation. At bias 5, the parent and boundary-weighted models produced:
+
+| Fresh split | Cheap MAE | Parent MAE | Boundary MAE | Cheap temporal error | Parent temporal error | Boundary temporal error | Parent false darkening | Boundary false darkening |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Static 50–51 | 0.013203 | 0.011304 | **0.011042** | **0.006912** | 0.007647 | 0.007867 | **0.0638%** | 0.1096% |
+| Moving 52–53 | 0.014946 | 0.013001 | 0.012975 | **0.007201** | 0.007579 | 0.007569 | **0.0410%** | 0.0457% |
+
+The boundary loss slightly improved frame MAE on both splits, but it raised false darkening above the 0.1% limit on static scenes and raised temporal error on static scenes. The moving split remains below the preservation limit, but temporal error is still above cheap rendering. This iteration also does not meet the full acceptance criteria.
+
+## Stopping point
+
+Across repeated scene-level holdouts, the model consistently lowers frame MAE relative to the cheap render on these procedural scenes. The temporal models consistently have higher temporal error than the cheap render, and preservation performance varies by scene and split. Two targeted history/preservation changes and an expanded-scene training run did not satisfy the joint targets for frame quality, temporal stability, and false darkening. We should stop model tuning here and present this as a completed proof of concept: the chosen renderer inputs support learned shadow refinement, but robust temporal preservation and real-time end-to-end performance remain unproven. The checkpoints and generated datasets remain local; evaluation JSONs are under ignored `artifacts/`.

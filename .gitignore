@@ -24,4 +24,6 @@ dataset/expanded_static_train/
 dataset/expanded_motion_train/
 dataset/expanded_static_test/
 dataset/expanded_motion_test/
+dataset/boundary_static_test/
+dataset/boundary_motion_test/
 __pycache__/
