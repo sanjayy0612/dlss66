@@ -123,6 +123,18 @@ def false_darkening_loss(prediction, condition, reference):
     return (excess * unchanged).sum() / unchanged.sum().clamp_min(1)
 
 
+def boundary_preservation_loss(prediction, condition, reference, radius=3):
+    """Upweight false darkening on unchanged pixels close to shadow edges."""
+    changed = (condition[:, :3] - reference).abs().amax(dim=1, keepdim=True) > 5 / 255
+    near_edge = F.max_pool2d(changed.float(), 2 * radius + 1, stride=1,
+                             padding=radius).bool()
+    unchanged = ~changed
+    darkening = (condition[:, :3] - prediction).amax(dim=1, keepdim=True)
+    excess = F.relu(darkening - 5 / 255) * unchanged
+    weights = 1.0 + 4.0 * near_edge
+    return (excess * weights).sum() / (unchanged * weights).sum().clamp_min(1)
+
+
 def supervised_frame_loss(prediction, logits, condition, reference,
                           changed_weight, unchanged_weight):
     rgb = condition[:, :3]
@@ -297,7 +309,7 @@ def run(data_root: Path, motion_data: Path, validation_data: Path,
             if confidence_gate:
                 confidence_loss = (confidence_regression_loss(c1, raw1, x1, h1, y1, v1) +
                                    confidence_regression_loss(c2, raw2, x2, h2, y2, v2)) / 2
-            preservation = torch.stack([false_darkening_loss(p, x, y)
+            preservation = torch.stack([boundary_preservation_loss(p, x, y)
                                         for p, x, y in ((p0, x0, y0), (p1, x1, y1),
                                                         (p2, x2, y2))]).mean()
             loss = (supervised + 0.05 * mask_loss + temporal_weight * temporal +
