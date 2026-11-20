@@ -1,6 +1,6 @@
 # Model design and tensor operations
 
-Decision: compare a deterministic RGB residual CNN, a small multiscale encoder-decoder, and a conditional diffusion teacher distilled to one call. On the original 96-pair RGB dataset, none beat the cheap input on test MAE. Later geometry-conditioned models improved aggregate test metrics but still failed on some scenes. The current focused task is to refine an existing low-resolution shadow cue. See [EXPERIMENT_LOG.md](EXPERIMENT_LOG.md).
+Decision: compare a deterministic RGB residual CNN, a small multiscale encoder-decoder, and a conditional diffusion teacher distilled to one call. On the original 96-pair RGB dataset, none beat the cheap input on test MAE. Later geometry-conditioned models improved aggregate test metrics but still failed on some scenes. The final project result is a proof of concept for refining an existing low-resolution shadow cue. Recurrent variants reduce frame MAE on procedural scenes, but temporal error and false darkening remain above project targets on some fresh scene sets. See the [experiment log](EXPERIMENT_LOG.md) and [final findings](TEMPORAL_NEXT_STEP_RESEARCH.md).
 
 ## Model A: implemented residual CNN
 

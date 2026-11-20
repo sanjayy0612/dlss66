@@ -1,6 +1,10 @@
 # dlss66 — lightweight neural rendering research
 
-Research and implementation of compact renderer-conditioned neural appearance models inspired by public DLSS 5 ideas. This project does not reproduce NVIDIA DLSS 5. It now compares a **deterministic RGB residual CNN**, a small multiscale model, and a one-call student distilled from a conditional diffusion teacher. An original three-box Godot scene remains a rendering and capture testbed.
+Completed research prototype for renderer-conditioned neural shadow refinement, inspired by public DLSS 5 ideas. This project does not reproduce NVIDIA DLSS 5. It contains deterministic RGB and geometry-conditioned models, temporal experiments, a one-call diffusion-distilled student, and a procedural Godot capture testbed.
+
+## Research outcome
+
+The completed prototype shows that renderer RGB plus depth, normals, light direction, and reprojected history can support learned shadow refinement on small procedural scenes. Models repeatedly lower frame MAE against the cheap shadow render. They do not yet meet the joint targets for temporal stability and preservation of unchanged pixels: temporal error remains higher than the cheap render, and false darkening varies by held-out scene. A confidence gate, expanded scene training, and boundary weighted preservation loss did not resolve both failures. This is evidence for a narrow shadow-refinement proof of concept, not a DLSS equivalent or a real-time renderer. Full measurements and the stopping rationale are in [TEMPORAL_NEXT_STEP_RESEARCH.md](docs/TEMPORAL_NEXT_STEP_RESEARCH.md) and [EXPERIMENT_LOG.md](docs/EXPERIMENT_LOG.md).
 
 Current model docs: [published DLSS 5 architecture](docs/DLSS5_ARCHITECTURE.md), [our model design](docs/MODEL_DESIGN.md), [training method](docs/TRAINING_METHODOLOGY.md), and [executed experiments](docs/EXPERIMENT_LOG.md). Earlier [graphics research](docs/RESEARCH.md), [AO-centered architecture](docs/ARCHITECTURE.md), and [original plan](docs/IMPLEMENTATION_PLAN.md) remain for historical context; AO is an optional baseline.
 
@@ -38,7 +42,7 @@ sh collect_dataset.sh
 
 This generates 480 local RGB pairs at 256×144 in ignored `dataset/raw/`, plus depth/normal geometry for each cheap frame, `manifest.jsonl`, and `summary.json`. Each pair uses the same procedural scene and camera; the cheap pass has directional shadows off and the reference pass has them on. The split is 336 train, 24 validation, 24 development, and 96 fresh test frames by scene. See [DATASET.md](docs/DATASET.md) for the exact format, validation results, and limitations. This is a small supervised shadow reconstruction dataset, not a DLSS 5 dataset.
 
-The current, narrower shadow-refinement task preserves low-resolution shadows in the cheap input and uses a higher-resolution shadow atlas as the reference:
+The primary experiment refined low-resolution shadows in the cheap input using a higher-resolution shadow atlas as the reference. The commands below reproduce the spatial-mask baseline:
 
 ```sh
 DLSS66_OUTPUT=dataset/shadow_resolution DLSS66_TASK=shadow_resolution DLSS66_LAYOUTS=32 sh collect_dataset.sh
@@ -52,11 +56,11 @@ python3 -m evaluation.benchmark_refinement --device auto
 python3 -m evaluation.visualize_refinement --data dataset/shadow_resolution_fresh --scenes 32 33 34 35 --mask-bias 1.5 --device auto
 ```
 
-On the M2, the 80,152-parameter spatial model reduced uncalibrated test MAE from 0.01136 to 0.01029 but initially worsened one scene. The 80,584-parameter recurrent model takes reprojected prior corrections as explicit input. Its MPS-trained checkpoint improved held-out static and moving MAE by about 18% and 20%, with false darkening under 0.1%. Temporal error remained about 12% and 7% above cheap rendering. Uniform history blending failed the preservation constraint. A 100-sample MPS benchmark measured 2.43 ms median model-only latency and 3.80 ms for synthetic input transfer, history warp, inference, and readback. This excludes Godot rendering and buffer export; real-time end-to-end integration is still unproven. See [EXPERIMENT_LOG.md](docs/EXPERIMENT_LOG.md).
+Across procedural scene holdouts, trained models usually lower frame MAE against the cheap render. Recurrent variants still have higher temporal error than the cheap renderer, and preservation varies across scenes. Confidence gating, additional training scenes, and a boundary weighted preservation loss did not meet all quality, stability, and false-darkening targets together. The work establishes a proof of concept for learned shadow refinement; it does not establish robust temporal quality or real-time end-to-end performance. See the [final findings and stopping rationale](docs/TEMPORAL_NEXT_STEP_RESEARCH.md).
 
-## Live M2 feasibility check
+## Earlier live M2 feasibility check (2026-11-16)
 
-The Godot/PyTorch bridge displays model output in a separate overlay. The latest aligned 48-frame run used **RGB-only conditioning**. The server uses the RGB checkpoint and calibrated hard gate:
+The earlier Godot/PyTorch bridge displayed model output in a separate overlay. Its aligned 48-frame run used **RGB-only conditioning**. Reproduction commands for that historical feasibility check follow; the recurrent model has not been integrated into this bridge:
 
 ```sh
 python3 -m evaluation.serve_live --checkpoint artifacts/shadow_refine_rgb_balanced2_32.pt --kind shadow_refine_rgb --device mps --frames 48 --warmup 10 --mask-bias 4 --hard-mask

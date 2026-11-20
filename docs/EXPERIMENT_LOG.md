@@ -425,6 +425,19 @@ OMP_NUM_THREADS=4 python3 -m evaluation.evaluate_recurrent --checkpoint artifact
 PYTHONPATH=. python3 -m unittest discover -s tests -q
 ```
 
+## Final research outcome, 2026-11-20
+
+The project demonstrated that cheap-render RGB and renderer geometry can support learned shadow refinement on a small procedural Godot scene set. The recurrent models lowered frame MAE against the cheap renderer on multiple scene holdouts. The latest expanded-data and boundary-loss candidates did not meet all acceptance targets:
+
+| Candidate and fresh split | Model frame MAE | Cheap frame MAE | Model temporal error | Cheap temporal error | False darkening |
+|---|---:|---:|---:|---:|---:|
+| Expanded training, static 46–47 | 0.010387 | 0.012745 | 0.007147 | 0.006597 | 0.0373% |
+| Expanded training, moving 48–49 | 0.008505 | 0.009686 | 0.006100 | 0.005917 | 0.1014% |
+| Boundary loss, static 50–51 | 0.011042 | 0.013203 | 0.007867 | 0.006912 | 0.1096% |
+| Boundary loss, moving 52–53 | 0.012975 | 0.014946 | 0.007569 | 0.007201 | 0.0457% |
+
+The model improves average frame error in these examples, but temporal error remains higher than cheap rendering. The false-darkening rate varies by scene and exceeds the 0.1% target on two fresh splits. Earlier live bridge measurements reached 166.58 ms median for the geometry-conditioned path; the recurrent model has not been integrated into a measured end-to-end path. Therefore this project does not establish a robust real-time renderer or a DLSS equivalent. See [TEMPORAL_NEXT_STEP_RESEARCH.md](TEMPORAL_NEXT_STEP_RESEARCH.md) for the full iterations, methods, and stopping decision.
+
 ### MPS training, held-out inference, and latency, 2026-11-17
 
 The MPS issue was environmental. Both installed PyTorch builds reported `is_built() == True` but `is_available() == False` inside the sandbox. An approved probe outside the sandbox returned `is_available() == True` and successfully created and summed an MPS tensor. The same PyTorch 2.13.0 Python 3.13 installation was used for the following run.
@@ -448,7 +461,7 @@ Thus MPS inference confirms the CPU image-quality and temporal trade-off. Frame 
 | MPS-to-CPU output readback | 0.19 ms | 0.22 ms |
 | Handoff, warp, model, and readback | **3.80 ms** | **4.63 ms** |
 
-The benchmark uses synthetic CPU tensors and an identity reprojection grid. It excludes Godot rendering, real geometry export, geometry-readback wait, IPC and presentation. It is not an end-to-end frame rate. The earlier 11-channel Godot bridge measured **166.58 ms median**; the recurrent path has not yet been integrated into that bridge. The current evidence shows the model compute is small enough for a real-time budget, while end-to-end feasibility remains open because renderer synchronization and readback dominate.
+The benchmark uses synthetic CPU tensors and an identity reprojection grid. It excludes Godot rendering, real geometry export, geometry-readback wait, IPC and presentation. It is not an end-to-end frame rate. The earlier 11-channel Godot bridge measured **166.58 ms median**; the recurrent path has not yet been integrated into that bridge. The synthetic timing shows only that model compute is a small part of the budget in isolation. End-to-end real-time feasibility remains unproven because renderer synchronization and readback dominate.
 
 Reproduction commands:
 
