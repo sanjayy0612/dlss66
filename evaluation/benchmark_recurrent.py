@@ -11,7 +11,8 @@ import torch
 from torch.nn import functional as F
 
 from models.baseline import select_device
-from models.temporal import TemporalShadowRefinementRenderer
+from models.temporal import (ConfidenceGatedTemporalRenderer, TemporalShadowRefinementRenderer,
+                             fuse_history)
 
 
 def synchronize(device):
@@ -34,8 +35,11 @@ def run(checkpoint: Path, device_name="mps", width=256, height=144,
         raise ValueError("resolution must be >=8; warmup non-negative; samples positive")
     device = select_device(device_name)
     torch.manual_seed(7)
-    model = TemporalShadowRefinementRenderer().to(device).eval()
     state = torch.load(checkpoint, map_location=device, weights_only=True)
+    model_type = (ConfidenceGatedTemporalRenderer
+                  if state.get("kind") == "shadow_refine_temporal_confidence"
+                  else TemporalShadowRefinementRenderer)
+    model = model_type().to(device).eval()
     model.load_state_dict(state["model"])
     model.mask_bias = 4.0
     model.hard_mask = True
@@ -61,7 +65,10 @@ def run(checkpoint: Path, device_name="mps", width=256, height=144,
         for _ in range(samples):
             synchronize(device)
             start = time.perf_counter()
-            model.forward_temporal(condition, history, valid)
+            result = model.forward_temporal(condition, history, valid)
+            if len(result) == 3:
+                allowed = (result[1] >= model.mask_bias).to(result[2].dtype)
+                fuse_history(condition, result[0], history, valid, result[2], allowed)
             synchronize(device)
             model_only.append((time.perf_counter() - start) * 1000)
 
@@ -78,7 +85,13 @@ def run(checkpoint: Path, device_name="mps", width=256, height=144,
             history_device = F.grid_sample(previous_output_device - previous_rgb_device,
                                            grid_device, mode="bilinear",
                                            padding_mode="zeros", align_corners=False) * valid_device
-            prediction, _ = model.forward_temporal(condition_device, history_device, valid_device)
+            result = model.forward_temporal(condition_device, history_device, valid_device)
+            if len(result) == 2:
+                prediction = result[0]
+            else:
+                allowed = (result[1] >= model.mask_bias).to(result[2].dtype)
+                prediction = fuse_history(condition_device, result[0], history_device,
+                                          valid_device, result[2], allowed)
             synchronize(device)
             computed = time.perf_counter()
             prediction_cpu = prediction.cpu()

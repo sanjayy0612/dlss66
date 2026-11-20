@@ -18,4 +18,10 @@ dataset/motion_train/*
 !dataset/motion_train/.gdignore
 dataset/motion_validation/*
 !dataset/motion_validation/.gdignore
+dataset/preservation_static_fresh/
+dataset/preservation_motion_fresh/
+dataset/expanded_static_train/
+dataset/expanded_motion_train/
+dataset/expanded_static_test/
+dataset/expanded_motion_test/
 __pycache__/

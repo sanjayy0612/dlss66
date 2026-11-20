@@ -3,6 +3,7 @@ import unittest
 import torch
 
 from training.train_temporal import temporal_residual_loss, weighted_l1
+from training.train_recurrent import false_darkening_loss
 
 
 class TemporalTrainingLossTests(unittest.TestCase):
@@ -35,6 +36,18 @@ class TemporalTrainingLossTests(unittest.TestCase):
         loss = weighted_l1(prediction, target, rgb)
         self.assertTrue(torch.isfinite(loss))
         self.assertGreater(float(loss), 0.0)
+
+    def test_false_darkening_penalty_ignores_intended_shadow(self):
+        condition = torch.full((1, 11, 1, 2), 0.5)
+        reference = condition[:, :3].clone()
+        reference[:, :, :, 1] = 0.3
+        prediction = condition[:, :3].clone()
+        prediction[:, :, :, 0] = 0.4
+        prediction[:, :, :, 1] = 0.3
+        self.assertAlmostEqual(float(false_darkening_loss(prediction, condition, reference)),
+                               0.1 - 5 / 255, places=6)
+        self.assertAlmostEqual(float(false_darkening_loss(reference, condition, reference)),
+                               0.0, places=6)
 
 
 if __name__ == "__main__":

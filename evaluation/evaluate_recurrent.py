@@ -7,7 +7,7 @@ from pathlib import Path
 import torch
 
 from models.baseline import select_device
-from models.temporal import TemporalShadowRefinementRenderer
+from models.temporal import ConfidenceGatedTemporalRenderer, TemporalShadowRefinementRenderer
 from training.paired import ShadowPairs
 from training.train_recurrent import evaluate_rollouts
 
@@ -17,8 +17,11 @@ def run(checkpoint: Path, data_root: Path, split: str, output: Path,
         history_blend_alpha=0.0):
     device = select_device(device_name)
     dataset = ShadowPairs(data_root, split, include_geometry=True)
-    model = TemporalShadowRefinementRenderer().to(device)
     state = torch.load(checkpoint, map_location=device, weights_only=True)
+    model_type = (ConfidenceGatedTemporalRenderer
+                  if state.get("kind") == "shadow_refine_temporal_confidence"
+                  else TemporalShadowRefinementRenderer)
+    model = model_type().to(device)
     model.load_state_dict(state["model"])
     metrics = evaluate_rollouts(model, dataset, device, mask_bias, hard_mask,
                                 history_blend_alpha=history_blend_alpha)

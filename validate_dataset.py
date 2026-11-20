@@ -14,7 +14,8 @@ ROOT = Path(__file__).resolve().parent / os.getenv("DLSS66_OUTPUT", "dataset/raw
 def load(variant):
     records = [json.loads(line) for line in (ROOT / f"manifest_{variant}.jsonl").read_text().splitlines()]
     default_layouts = "32" if records[0]["effect"].startswith("Shadow atlas") else "40"
-    assert len(records) == int(os.getenv("DLSS66_LAYOUTS", default_layouts)) * int(os.getenv("DLSS66_FRAMES", "12")), (
+    default_frames = "48" if os.getenv("DLSS66_MOTION") == "1" else "12"
+    assert len(records) == int(os.getenv("DLSS66_LAYOUTS", default_layouts)) * int(os.getenv("DLSS66_FRAMES", default_frames)), (
         variant, len(records)
     )
     by_key = {}
