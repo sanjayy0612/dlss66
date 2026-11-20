@@ -6,7 +6,14 @@ Completed research prototype for renderer-conditioned neural shadow refinement, 
 
 The completed prototype shows that renderer RGB plus depth, normals, light direction, and reprojected history can support learned shadow refinement on small procedural scenes. Models repeatedly lower frame MAE against the cheap shadow render. They do not yet meet the joint targets for temporal stability and preservation of unchanged pixels: temporal error remains higher than the cheap render, and false darkening varies by held-out scene. A confidence gate, expanded scene training, and boundary weighted preservation loss did not resolve both failures. This is evidence for a narrow shadow-refinement proof of concept, not a DLSS equivalent or a real-time renderer. Full measurements and the stopping rationale are in [TEMPORAL_NEXT_STEP_RESEARCH.md](docs/TEMPORAL_NEXT_STEP_RESEARCH.md) and [EXPERIMENT_LOG.md](docs/EXPERIMENT_LOG.md).
 
-Current model docs: [published DLSS 5 architecture](docs/DLSS5_ARCHITECTURE.md), [our model design](docs/MODEL_DESIGN.md), [training method](docs/TRAINING_METHODOLOGY.md), and [executed experiments](docs/EXPERIMENT_LOG.md). Earlier [graphics research](docs/RESEARCH.md), [AO-centered architecture](docs/ARCHITECTURE.md), and [original plan](docs/IMPLEMENTATION_PLAN.md) remain for historical context; AO is an optional baseline.
+| Latest fresh-scene candidate | Frame MAE (model vs cheap) | Temporal error (model vs cheap) | False darkening | Result |
+|---|---:|---:|---:|---|
+| Static scenes 50–51 | 0.01104 vs 0.01320 | 0.00787 vs 0.00691 | 0.110% | Fails 0.1% preservation cap |
+| Moving scenes 52–53 | 0.01298 vs 0.01495 | 0.00757 vs 0.00720 | 0.046% | Passes preservation cap; temporal error still higher |
+
+These are small procedural-scene holdouts. They do not establish general performance across real games or engines.
+
+Project docs: [model architecture diagram](docs/MODEL_ARCHITECTURE.md), [model design](docs/MODEL_DESIGN.md), [training method](docs/TRAINING_METHODOLOGY.md), [experiment log](docs/EXPERIMENT_LOG.md), and [published DLSS 5 architecture](docs/DLSS5_ARCHITECTURE.md). Earlier [graphics research](docs/RESEARCH.md), [AO-centered architecture](docs/ARCHITECTURE.md), and [original plan](docs/IMPLEMENTATION_PLAN.md) remain for historical context; AO is an optional baseline.
 
 ## How the shadow-refinement experiment works
 
@@ -30,6 +37,8 @@ flowchart LR
 
 This diagram describes the offline research pipeline. The recurrent model has not been integrated into a measured end-to-end Godot renderer path.
 
+The detailed [model architecture diagram](docs/MODEL_ARCHITECTURE.md) shows all 15 input channels, the encoder-decoder feature sizes, output heads, and history fusion rule.
+
 ### Example output
 
 Each row is a held-out moving scene frame. The columns show the cheap input, the model output, the higher-quality reference, and the model error amplified 8×. The model adds some missing shadow detail, but visible differences remain; this is a qualitative example, not proof that all scenes improve.
@@ -42,7 +51,7 @@ The image is generated from scenes 48 and 49 with:
 python3 -m evaluation.visualize_recurrent --data dataset/expanded_motion_test --checkpoint artifacts/shadow_refine_confidence_expanded_mps.pt --output artifacts/expanded_model_output.png --frame 48 0 --frame 48 16 --frame 49 24
 ```
 
-## Minimal model
+## Quick start: minimal pipeline smoke test
 
 Requires Python 3, PyTorch, and NumPy. The synthetic pairs below are a training-pipeline smoke test only.
 
