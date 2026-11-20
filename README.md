@@ -8,6 +8,40 @@ The completed prototype shows that renderer RGB plus depth, normals, light direc
 
 Current model docs: [published DLSS 5 architecture](docs/DLSS5_ARCHITECTURE.md), [our model design](docs/MODEL_DESIGN.md), [training method](docs/TRAINING_METHODOLOGY.md), and [executed experiments](docs/EXPERIMENT_LOG.md). Earlier [graphics research](docs/RESEARCH.md), [AO-centered architecture](docs/ARCHITECTURE.md), and [original plan](docs/IMPLEMENTATION_PLAN.md) remain for historical context; AO is an optional baseline.
 
+## How the shadow-refinement experiment works
+
+The same procedural scene and camera produce a cheap input and a higher-quality training reference. The model receives RGB plus renderer geometry and light direction. For later frames, it also receives the previous predicted correction after reprojection into the current view.
+
+```mermaid
+flowchart LR
+    Scene[Same scene and camera]
+    Scene --> Cheap[Cheap pass<br/>512 shadow atlas]
+    Scene --> Ref[Reference pass<br/>4096 shadow atlas]
+    Cheap --> Buffers[Cheap RGB + depth + normals<br/>+ light direction]
+    Buffers --> Model[Compact recurrent<br/>shadow-refinement CNN]
+    Prev[Previous model correction] --> Warp[Depth-tested reprojection]
+    Warp --> Model
+    Model --> Gate[Correction mask<br/>+ confidence gate]
+    Gate --> Out[Refined current frame]
+    Ref --> Loss[Training target and<br/>held-out comparison]
+    Out --> Loss
+    Loss --> Metrics[Frame error<br/>temporal error<br/>false darkening]
+```
+
+This diagram describes the offline research pipeline. The recurrent model has not been integrated into a measured end-to-end Godot renderer path.
+
+### Example output
+
+Each row is a held-out moving scene frame. The columns show the cheap input, the model output, the higher-quality reference, and the model error amplified 8×. The model adds some missing shadow detail, but visible differences remain; this is a qualitative example, not proof that all scenes improve.
+
+![Held-out examples: cheap input, recurrent model output, high-quality reference, and amplified model error](docs/images/model-output-comparison.png)
+
+The image is generated from scenes 48 and 49 with:
+
+```sh
+python3 -m evaluation.visualize_recurrent --data dataset/expanded_motion_test --checkpoint artifacts/shadow_refine_confidence_expanded_mps.pt --output artifacts/expanded_model_output.png --frame 48 0 --frame 48 16 --frame 49 24
+```
+
 ## Minimal model
 
 Requires Python 3, PyTorch, and NumPy. The synthetic pairs below are a training-pipeline smoke test only.
