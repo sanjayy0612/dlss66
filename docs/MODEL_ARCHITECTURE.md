@@ -20,38 +20,11 @@ The previous correction is depth-tested and warped from the previous frame. A mi
 
 ## Network and output
 
-```mermaid
-flowchart LR
-    Input[15 channels<br/>RGB, depth, normal, valid, light,<br/>history correction, history valid]
-    Input --> E0[Encoder 0<br/>full resolution, 12 features]
-    E0 --> Pool1[2× average pool]
-    Pool1 --> E1[Encoder 1<br/>half resolution, 16 features]
-    E1 --> Pool2[2× average pool]
-    Pool2 --> E2[Encoder 2<br/>quarter resolution, 24 features]
-    E2 --> Pool3[2× average pool]
-    Pool3 --> E3[Encoder 3 + middle<br/>eighth resolution, 32 features]
-    E3 --> Up2[Upsample + skip from encoder 2]
-    E2 --> Up2
-    Up2 --> D2[Decoder 2<br/>24 features]
-    D2 --> Up1[Upsample + skip from encoder 1]
-    E1 --> Up1
-    Up1 --> D1[Decoder 1<br/>16 features]
-    D1 --> Up0[Upsample + skip from encoder 0]
-    E0 --> Up0
-    Up0 --> D0[Decoder 0<br/>12 features]
-    D0 --> Heads[Three heads]
-    Heads --> Mask[Correction mask<br/>1 logit]
-    Heads --> Strength[RGB correction strength<br/>3 values]
-    Heads --> Confidence[History confidence<br/>1 value]
-    Mask --> Current[Current correction<br/>0.6 × mask × tanh(strength)]
-    Strength --> Current
-    Current --> Fuse[History fusion<br/>confidence × correspondence × mask support]
-    Confidence --> Fuse
-    Input --> Fuse
-    Fuse --> Output[Clamped refined RGB]
-```
+The README includes a [concept illustration](../README.md#how-the-shadow-refinement-experiment-works). It is illustrative, not a screenshot or a literal network schematic. Exact architecture details follow.
 
-Each encoder and decoder block uses two 3×3 convolutions with ReLU. Decoder blocks bilinearly upsample the coarser feature map, concatenate the matching encoder features, then apply the two convolutions. The network has 80,693 parameters.
+The encoder reduces spatial resolution in three steps. Its feature widths are 12 at full resolution, 16 at half resolution, 24 at quarter resolution, and 32 at one-eighth resolution. The middle block keeps 32 channels. The decoder upsamples and concatenates the matching encoder features, then returns to 24, 16, and 12 channels at full resolution. Each encoder and decoder block uses two 3×3 convolutions with ReLU.
+
+The network has 80,693 parameters.
 
 The mask head predicts where a correction is allowed. The strength head predicts a signed RGB residual bounded by `max_delta=0.6`. The confidence head predicts how much reprojected history to use. At inference, history fusion is further limited by geometric correspondence and the current hard correction-mask support:
 
