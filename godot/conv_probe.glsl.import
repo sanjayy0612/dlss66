@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://ck1sctlxmbqr8"
+path="res://.godot/imported/conv_probe.glsl-49a179ddadae17cc6d8851f8d632adf3.res"
+
+[deps]
+
+source_file="res://godot/conv_probe.glsl"
+dest_files=["res://.godot/imported/conv_probe.glsl-49a179ddadae17cc6d8851f8d632adf3.res"]
+
+[params]
+

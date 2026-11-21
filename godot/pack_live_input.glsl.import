@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://2rbidjdxkw2y"
+path="res://.godot/imported/pack_live_input.glsl-dbb9253af3c9beba3cae817db5c18d9f.res"
+
+[deps]
+
+source_file="res://godot/pack_live_input.glsl"
+dest_files=["res://.godot/imported/pack_live_input.glsl-dbb9253af3c9beba3cae817db5c18d9f.res"]
+
+[params]
+

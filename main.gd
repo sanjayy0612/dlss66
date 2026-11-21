@@ -4,7 +4,10 @@ const WIDTH := 256
 const HEIGHT := 144
 
 func _ready() -> void:
-	if OS.get_cmdline_user_args().has("--dataset") or OS.get_cmdline_user_args().has("--live"):
+	if OS.get_cmdline_user_args().has("--gpu-weights"):
+		add_child(preload("res://godot/godot_weights_probe.gd").new())
+		return
+	if OS.get_cmdline_user_args().has("--dataset") or OS.get_cmdline_user_args().has("--live") or OS.get_cmdline_user_args().has("--neural-gpu"):
 		get_tree().change_scene_to_file.call_deferred("res://dataset.tscn")
 		return
 	get_window().size = Vector2i(WIDTH, HEIGHT)

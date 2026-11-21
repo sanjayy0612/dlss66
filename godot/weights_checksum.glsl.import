@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://ctsjsk052sxjc"
+path="res://.godot/imported/weights_checksum.glsl-86fbea9320a8808582099a5d32c996eb.res"
+
+[deps]
+
+source_file="res://godot/weights_checksum.glsl"
+dest_files=["res://.godot/imported/weights_checksum.glsl-86fbea9320a8808582099a5d32c996eb.res"]
+
+[params]
+

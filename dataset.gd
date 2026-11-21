@@ -18,12 +18,18 @@ var task: String
 var shadow_atlas_size: int
 var motion_mode := false
 var moving_mesh: MeshInstance3D
+var gpu_effect
+var gpu_demo_camera_angle := 0.2
+var gpu_demo_time := 0.0
+var gpu_demo_running := false
+var gpu_demo_label: Label
 
 func _ready() -> void:
 	get_window().size = SIZE
-	variant = OS.get_environment("DLSS66_VARIANT")
-	task = OS.get_environment("DLSS66_TASK") if OS.has_environment("DLSS66_TASK") else "shadow_off"
-	motion_mode = OS.get_environment("DLSS66_MOTION") == "1"
+	var neural_gpu_requested := OS.get_cmdline_user_args().has("--neural-gpu")
+	variant = "cheap" if neural_gpu_requested else OS.get_environment("DLSS66_VARIANT")
+	task = "shadow_resolution" if neural_gpu_requested else (OS.get_environment("DLSS66_TASK") if OS.has_environment("DLSS66_TASK") else "shadow_off")
+	motion_mode = neural_gpu_requested or OS.get_environment("DLSS66_MOTION") == "1"
 	output_dir = "res://" + OS.get_environment("DLSS66_OUTPUT") if OS.has_environment("DLSS66_OUTPUT") else output_dir
 	if variant != "cheap" and variant != "reference":
 		push_error("Set DLSS66_VARIANT to cheap or reference")
@@ -51,6 +57,9 @@ func _ready() -> void:
 	environment.ssao_enabled = true
 	environment.ssao_intensity = 0.0
 	camera.environment = environment
+	if neural_gpu_requested:
+		await run_neural_gpu_demo()
+		return
 	if OS.get_cmdline_user_args().has("--live"):
 		var live_ok := await run_live()
 		if not live_ok and probe != null:
@@ -147,6 +156,155 @@ func _ready() -> void:
 		await get_tree().process_frame
 	print("DATASET_COMPLETE variant=", variant, " frames=", layouts * frames)
 	get_tree().quit(0)
+
+func run_neural_gpu_demo() -> void:
+	# Match the held-out moving scene used to validate the trained checkpoint.
+	variant = "cheap"
+	task = "shadow_resolution"
+	motion_mode = true
+	make_layout(48)
+	camera.near = 0.05
+	camera.far = 100.0
+	var compositor := Compositor.new()
+	gpu_effect = preload("res://godot/gpu_shadow_effect.gd").new()
+	gpu_effect.near_plane = camera.near
+	gpu_effect.far_plane = camera.far
+	gpu_effect.light_direction_world = -sun.global_transform.basis.z
+	compositor.compositor_effects = [gpu_effect]
+	camera.compositor = compositor
+	if OS.get_cmdline_user_args().has("--capture-gpu-pairs"):
+		await capture_gpu_pairs()
+		camera.compositor = null
+		await get_tree().process_frame
+		RenderingServer.call_on_render_thread(gpu_effect.cleanup)
+		await get_tree().process_frame
+		get_tree().quit(0)
+		return
+	var hud := CanvasLayer.new()
+	add_child(hud)
+	gpu_demo_label = Label.new()
+	gpu_demo_label.position = Vector2(8, 8)
+	gpu_demo_label.add_theme_font_size_override("font_size", 12)
+	gpu_demo_label.add_theme_color_override("font_color", Color.WHITE)
+	_update_gpu_demo_label()
+	hud.add_child(gpu_demo_label)
+	var frame_count := int(OS.get_environment("DLSS66_GPU_DEMO_FRAMES")) if OS.has_environment("DLSS66_GPU_DEMO_FRAMES") else 72
+	var viewport_rid := get_viewport().get_viewport_rid()
+	RenderingServer.viewport_set_measure_render_time(viewport_rid, true)
+	var gpu_render_times: Array[float] = []
+	var cpu_render_times: Array[float] = []
+	for frame_id in range(frame_count):
+		gpu_demo_camera_angle = 0.2 + TAU * float(frame_id % FRAMES) / float(FRAMES)
+		camera.position = Vector3(cos(gpu_demo_camera_angle) * 3.1, 2.7,
+			sin(gpu_demo_camera_angle) * 3.1)
+		camera.look_at(Vector3(0, 0.65, 0))
+		var phase := TAU * float(frame_id % MOTION_FRAMES) / float(MOTION_FRAMES)
+		moving_mesh.position = Vector3(0.9 * cos(phase + 0.4), 0.65,
+			0.9 * sin(phase + 0.4))
+		RenderingServer.force_draw()
+		await get_tree().process_frame
+		if frame_id >= 6:
+			gpu_render_times.append(RenderingServer.viewport_get_measured_render_time_gpu(viewport_rid))
+			cpu_render_times.append(RenderingServer.viewport_get_measured_render_time_cpu(viewport_rid))
+	if not gpu_render_times.is_empty():
+		gpu_render_times.sort()
+		cpu_render_times.sort()
+		print("GPU_SHADOW_FRAME_TIMING samples=", gpu_render_times.size(),
+			" viewport_gpu_p50_ms=", _gpu_demo_percentile(gpu_render_times, 0.50),
+			" viewport_gpu_p95_ms=", _gpu_demo_percentile(gpu_render_times, 0.95),
+			" viewport_cpu_p50_ms=", _gpu_demo_percentile(cpu_render_times, 0.50),
+			" viewport_cpu_p95_ms=", _gpu_demo_percentile(cpu_render_times, 0.95))
+	RenderingServer.viewport_set_measure_render_time(viewport_rid, false)
+	if OS.get_cmdline_user_args().has("--record-neural-gpu"):
+		await get_tree().create_timer(0.5).timeout
+		camera.compositor = null
+		await get_tree().process_frame
+		RenderingServer.call_on_render_thread(gpu_effect.cleanup)
+		await get_tree().process_frame
+		get_tree().quit(0)
+	else:
+		gpu_demo_running = true
+
+func _process(delta: float) -> void:
+	if not gpu_demo_running:
+		return
+	gpu_demo_time += delta
+	gpu_demo_camera_angle = 0.2 + gpu_demo_time * 0.22
+	camera.position = Vector3(cos(gpu_demo_camera_angle) * 3.1, 2.7,
+		sin(gpu_demo_camera_angle) * 3.1)
+	camera.look_at(Vector3(0, 0.65, 0))
+	var phase := gpu_demo_time * 0.9
+	moving_mesh.position = Vector3(0.9 * cos(phase + 0.4), 0.65,
+		0.9 * sin(phase + 0.4))
+
+func _gpu_demo_percentile(sorted_values: Array[float], percentile: float) -> float:
+	return sorted_values[clampi(int(ceil(float(sorted_values.size()) * percentile)) - 1, 0, sorted_values.size() - 1)]
+
+func _exit_tree() -> void:
+	if gpu_effect != null:
+		camera.compositor = null
+		RenderingServer.call_on_render_thread(gpu_effect.cleanup)
+
+func _input(event: InputEvent) -> void:
+	if gpu_effect == null or not event is InputEventKey or not event.pressed or event.echo:
+		return
+	if event.keycode == KEY_N:
+		gpu_effect.enabled = not gpu_effect.enabled
+		print("GPU_SHADOW_EFFECT enabled=", gpu_effect.enabled)
+		_update_gpu_demo_label()
+
+func _update_gpu_demo_label() -> void:
+	if gpu_demo_label == null:
+		return
+	var state := "ON" if gpu_effect == null or gpu_effect.enabled else "OFF"
+	gpu_demo_label.text = "GODOT GPU SHADOW MODEL: %s  |  N: toggle  |  spatial only" % state
+
+func capture_gpu_pairs() -> void:
+	var pair_count := int(OS.get_environment("DLSS66_GPU_PAIR_FRAMES")) if OS.has_environment("DLSS66_GPU_PAIR_FRAMES") else 24
+	var pair_dir := "res://artifacts/gpu_shadow_pairs"
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(pair_dir))
+	var manifest := FileAccess.open(pair_dir.path_join("manifest.jsonl"), FileAccess.WRITE)
+	if manifest == null:
+		push_error("Cannot create GPU comparison capture manifest")
+		return
+	# Allow the compositor to load the exported weights and compile its pipelines.
+	for _warmup in 6:
+		RenderingServer.force_draw()
+		await get_tree().process_frame
+	for frame_id in range(pair_count):
+		camera.position = Vector3(cos(0.2) * 3.1, 2.7, sin(0.2) * 3.1)
+		camera.look_at(Vector3(0, 0.65, 0))
+		var phase := TAU * float(frame_id) / float(pair_count)
+		moving_mesh.position = Vector3(0.9 * cos(phase + 0.4), 0.65,
+			0.9 * sin(phase + 0.4))
+		var row := {"frame": frame_id, "moving_center": [moving_mesh.position.x,
+			moving_mesh.position.y, moving_mesh.position.z]}
+		for variant_name in ["cheap", "neural", "reference"]:
+			RenderingServer.directional_shadow_atlas_set_size(4096 if variant_name == "reference" else 512, true)
+			gpu_effect.enabled = variant_name == "neural"
+			RenderingServer.force_draw()
+			await RenderingServer.frame_post_draw
+			await get_tree().process_frame
+			var image := get_viewport().get_texture().get_image()
+			if image == null or image.is_empty():
+				push_error("GPU comparison frame readback failed")
+				manifest.close()
+				return
+			image.resize(SIZE.x, SIZE.y, Image.INTERPOLATE_LANCZOS)
+			image.convert(Image.FORMAT_RGB8)
+			var relative_path := "%s_%03d.png" % [variant_name, frame_id]
+			var error := image.save_png(pair_dir.path_join(relative_path))
+			if error != OK:
+				push_error("GPU comparison save failed: " + str(error))
+				manifest.close()
+				return
+			row[variant_name] = relative_path
+		manifest.store_line(JSON.stringify(row))
+		if frame_id % 6 == 5:
+			print("GPU_CAPTURE_PAIR frame=", frame_id + 1, " of ", pair_count)
+	manifest.close()
+	RenderingServer.directional_shadow_atlas_set_size(512, true)
+	gpu_effect.enabled = true
 
 func run_live() -> bool:
 	# A local experimental bridge. The 3D viewport stays separate from the output overlay.

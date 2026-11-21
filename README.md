@@ -15,6 +15,8 @@ These are small procedural-scene holdouts. They do not establish general perform
 
 Project docs: [model architecture diagram](docs/MODEL_ARCHITECTURE.md), [model design](docs/MODEL_DESIGN.md), [training method](docs/TRAINING_METHODOLOGY.md), [experiment log](docs/EXPERIMENT_LOG.md), and [published DLSS 5 architecture](docs/DLSS5_ARCHITECTURE.md). Earlier [graphics research](docs/RESEARCH.md), [AO-centered architecture](docs/ARCHITECTURE.md), and [original plan](docs/IMPLEMENTATION_PLAN.md) remain for historical context; AO is an optional baseline.
 
+The project now has a live Godot compositor path that packs renderer textures and runs the spatial model on the GPU. Watch the [live Godot GPU clip](docs/videos/neural-shadow-godot-gpu.mp4) or the longer [offline four-panel comparison](docs/videos/neural-shadow-demo.mp4). The live path improves this small scene's shadow-region error, but its unchanged-pixel and temporal error are worse, and GPU frame timing is unavailable on the tested Metal path. It is a measured integration prototype, not a real-time DLSS replacement. See the [Godot demo report](docs/REALTIME_DEMO.md).
+
 ## How the shadow-refinement experiment works
 
 The same procedural scene and camera produce a cheap input and a higher-quality training reference. The model receives RGB plus renderer geometry and light direction. For later frames, it also receives the previous predicted correction after reprojection into the current view.
@@ -28,6 +30,32 @@ The same procedural scene and camera produce a cheap input and a higher-quality 
 Each row is a held-out moving scene frame. The columns show the cheap input, the model output, the higher-quality reference, and the model error amplified 8×. The model adds some missing shadow detail, but visible differences remain; this is a qualitative example, not proof that all scenes improve.
 
 ![Held-out examples: cheap input, recurrent model output, high-quality reference, and amplified model error](docs/images/model-output-comparison.png)
+
+### Moving-scene demo video
+
+[![Watch the 4-second held-out sequence](docs/images/neural-shadow-demo-poster.png)](docs/videos/neural-shadow-demo.mp4)
+
+The clip compares the cheap render, recurrent model output, high-quality reference, and amplified model error across 48 moving frames. The model runs offline from recorded frames and geometry with known-scene reprojection; this is **not** live Godot inference or a real-time game capture.
+
+### Live Godot GPU demo
+
+[![Live Godot GPU shadow refinement](docs/images/neural-shadow-godot-gpu-poster.png)](docs/videos/neural-shadow-godot-gpu.mp4)
+
+This 2.1-second capture comes from the Godot 4.7.2 compositor on an Apple M2. Godot packs color, depth, normals, and view-space light direction into the model input on the GPU, runs the 11-channel spatial network, and writes the refined color back into the renderer. Inference uses 256×144 inputs; Movie Maker recorded the 1152×648 display output at 12 FPS. The model runs independently on each frame. It has no temporal history or motion reprojection.
+
+The exported 80,152-parameter runtime weights are included in [`godot/model`](godot/model), so the live demo does not need a local PyTorch checkpoint.
+
+![Same-pose comparison of cheap shadows, Godot GPU output, the high-quality reference, and amplified model error](docs/images/neural-shadow-gpu-live-comparison.png)
+
+In a 12-frame fixed-camera sequence with a moving sphere, mean RGB MAE against the 4096-shadow reference fell from **0.00930** for cheap shadows to **0.00890** for the model (**4.3% lower**). Error fell by 8.2% in changed shadow regions, while error on unchanged regions increased from 0.00079 to 0.00113. Static-region frame-to-frame error was 0.00023 for cheap shadows and 0.00040 for the model. The quality gain is narrow, and this spatial model adds some flicker.
+
+Reproduce the live capture and quality comparison with the commands in [REALTIME_DEMO.md](docs/REALTIME_DEMO.md). The per-frame GPU timing counters returned zero on this M2 Metal run, so a real-time frame budget has not been established.
+
+Recreate it with:
+
+```sh
+python3 -m evaluation.make_demo_video --scene 48 --count 48 --fps 12 --output docs/videos/neural-shadow-demo.mp4
+```
 
 The comparison image was generated from scenes 48 and 49 with:
 

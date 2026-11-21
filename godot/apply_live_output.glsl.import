@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://clf1x4tt2jt2i"
+path="res://.godot/imported/apply_live_output.glsl-5e2d6ca4feb958dfd910dec64d8d6d88.res"
+
+[deps]
+
+source_file="res://godot/apply_live_output.glsl"
+dest_files=["res://.godot/imported/apply_live_output.glsl-5e2d6ca4feb958dfd910dec64d8d6d88.res"]
+
+[params]
+

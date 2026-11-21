@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://v8nyaapli6iu"
+path="res://.godot/imported/conv_layer.glsl-de9c9c82b7ea35f0899aaa45bcf4299c.res"
+
+[deps]
+
+source_file="res://godot/conv_layer.glsl"
+dest_files=["res://.godot/imported/conv_layer.glsl-de9c9c82b7ea35f0899aaa45bcf4299c.res"]
+
+[params]
+
